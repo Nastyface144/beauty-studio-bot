@@ -1,0 +1,88 @@
+"""Настройки бота: читаются из .env / переменных окружения."""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from datetime import time
+from pathlib import Path
+from zoneinfo import ZoneInfo
+
+from dotenv import load_dotenv
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+load_dotenv(BASE_DIR / ".env")
+
+
+def _parse_ids(raw: str) -> frozenset[int]:
+    ids = set()
+    for part in raw.replace(";", ",").split(","):
+        part = part.strip()
+        if part.lstrip("-").isdigit():
+            ids.add(int(part))
+    return frozenset(ids)
+
+
+def _parse_time(raw: str, default: time) -> time:
+    try:
+        hours, minutes = raw.strip().split(":")
+        return time(int(hours), int(minutes))
+    except (ValueError, AttributeError):
+        return default
+
+
+@dataclass(frozen=True)
+class Settings:
+    bot_token: str
+    admin_ids: frozenset[int]
+    payment_token: str
+    timezone: ZoneInfo
+    db_path: Path
+
+    studio_name: str = "Bloom Beauty Studio"
+    studio_address: str = "Москва, ул. Цветочная, 12, 2 этаж"
+    studio_phone: str = "+7 (999) 123-45-67"
+    studio_instagram: str = ""
+    studio_map_url: str = ""
+
+    work_start: time = time(9, 0)
+    work_end: time = time(20, 0)
+    slot_step_min: int = 30
+    booking_days: int = 14
+    min_lead_min: int = 30
+    prepay_percent: int = 30
+    hold_minutes: int = 15
+    cancel_hours: int = 12
+
+    gallery_dir: Path = field(default=BASE_DIR / "assets" / "gallery")
+
+    @property
+    def payments_enabled(self) -> bool:
+        return bool(self.payment_token)
+
+
+def load_settings() -> Settings:
+    token = os.getenv("BOT_TOKEN", "").strip()
+    if not token:
+        raise RuntimeError(
+            "Не задан BOT_TOKEN. Скопируйте .env.example в .env и укажите токен от @BotFather."
+        )
+
+    tz_name = os.getenv("TIMEZONE", "Europe/Moscow").strip() or "Europe/Moscow"
+    db_path = Path(os.getenv("DB_PATH", str(BASE_DIR / "data" / "studio.db")))
+    if not db_path.is_absolute():
+        db_path = BASE_DIR / db_path
+
+    return Settings(
+        bot_token=token,
+        admin_ids=_parse_ids(os.getenv("ADMIN_ID", "")),
+        payment_token=os.getenv("PAYMENT_TOKEN", "").strip(),
+        timezone=ZoneInfo(tz_name),
+        db_path=db_path,
+        studio_name=os.getenv("STUDIO_NAME", Settings.studio_name),
+        studio_address=os.getenv("STUDIO_ADDRESS", Settings.studio_address),
+        studio_phone=os.getenv("STUDIO_PHONE", Settings.studio_phone),
+        studio_instagram=os.getenv("STUDIO_INSTAGRAM", "").strip(),
+        studio_map_url=os.getenv("STUDIO_MAP_URL", "").strip(),
+        work_start=_parse_time(os.getenv("WORK_START", "09:00"), time(9, 0)),
+        work_end=_parse_time(os.getenv("WORK_END", "20:00"), time(20, 0)),
+    )
