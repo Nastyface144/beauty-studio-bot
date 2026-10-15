@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import logging
+from datetime import timedelta
 
 from aiogram import Bot
 from aiogram.exceptions import TelegramAPIError
@@ -56,6 +57,15 @@ async def request_reviews(bot: Bot, db: Database, settings: Settings) -> None:
             log.warning("Запрос оценки #%s не доставлен: %s", booking.id, e)
 
 
+async def admin_digest(bot: Bot, db: Database, settings: Settings) -> None:
+    """Вечерняя сводка админу: кто придёт завтра."""
+    now = now_local(settings.timezone)
+    tomorrow = now.date() + timedelta(days=1)
+    bookings = await db.bookings_for_day(tomorrow, now)
+    await notify_admins(bot, settings, texts.admin_digest(tomorrow, bookings))
+    log.info("Сводка на завтра отправлена: %s записей", len(bookings))
+
+
 async def _safe(job, *args) -> None:
     try:
         await job(*args)
@@ -70,4 +80,9 @@ def setup_scheduler(bot: Bot, db: Database, settings: Settings) -> AsyncIOSchedu
             _safe, "interval", seconds=30, args=(job, bot, db, settings),
             id=job.__name__, max_instances=1, coalesce=True,
         )
+    scheduler.add_job(
+        _safe, "cron", hour=settings.digest_time.hour, minute=settings.digest_time.minute,
+        args=(admin_digest, bot, db, settings), id="admin_digest", max_instances=1, coalesce=True,
+        misfire_grace_time=600,
+    )
     return scheduler

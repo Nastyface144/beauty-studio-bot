@@ -3,6 +3,7 @@
 # поднимается после перезагрузки сервера и после сбоев.
 # Запускать из папки бота после того, как ./start.sh хотя бы раз отработал:
 #   sudo ./deploy/install-service.sh
+# Обновление бота: git pull && sudo ./deploy/install-service.sh
 set -e
 cd "$(dirname "$0")/.."
 DIR="$(pwd)"
@@ -14,6 +15,9 @@ fi
 if [ ! -f .env ] || [ ! -x .venv/bin/python ]; then
   echo "Сначала запустите ./start.sh — он создаст .env и установит зависимости."; exit 1
 fi
+
+# Новые зависимости после обновления (если появились)
+.venv/bin/pip install --quiet -r requirements.txt
 
 RUN_USER="${SUDO_USER:-root}"
 chown -R "$RUN_USER" "$DIR"
@@ -37,7 +41,8 @@ WantedBy=multi-user.target
 UNIT
 
 systemctl daemon-reload
-systemctl enable --now $SERVICE
+systemctl enable $SERVICE
+systemctl restart $SERVICE   # повторный запуск скрипта = обновление: бот перезапустится с новым кодом
 sleep 3
 systemctl --no-pager --lines=5 status $SERVICE || true
 echo

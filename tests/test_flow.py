@@ -355,3 +355,93 @@ async def test_real_invoice_flow(db, tmp_path):
         "invoice_payload": f"booking:{booking.id}",
     }})
     assert not h.session.of(AnswerPreCheckoutQuery)[-1].ok
+
+
+async def test_booking_window_is_30_days(harness: Harness):
+    h = harness
+    await h.message("/start")
+    await h.click("m:book")
+    await h.click("b:cat:brows")
+    await h.click("b:srv:5")
+    await h.click("b:mst:1")
+    days = [b for b in h.buttons() if b.startswith("b:day:")]
+    last = day_code(now_local(TZ).date() + timedelta(days=29))
+    assert f"b:day:{last}" in days
+    assert len(days) >= 29  # сегодня может быть уже закрыто по времени
+
+
+async def test_weekly_day_off(harness: Harness):
+    h = harness
+    tomorrow = now_local(TZ).date() + timedelta(days=1)
+    await h.message("/admin", uid=ADMIN)
+    await h.click("a:weekly:", uid=ADMIN)
+    await h.click(f"a:wk:{tomorrow.weekday()}", uid=ADMIN)
+    assert await h.db.get_weekly_off() == {tomorrow.weekday()}
+
+    await h.message("/start")
+    await h.click("m:book")
+    await h.click("b:cat:brows")
+    await h.click("b:srv:5")
+    await h.click("b:mst:1")
+    assert f"b:day:{day_code(tomorrow)}" not in h.buttons()
+    # даже прямой клик по дню не даёт выбрать время
+    await h.click(f"b:day:{day_code(tomorrow)}")
+    assert not [b for b in h.buttons() if b.startswith("b:time:")]
+
+    await h.click(f"a:wk:{tomorrow.weekday()}", uid=ADMIN)
+    assert await h.db.get_weekly_off() == set()
+    assert not h.errors, h.errors
+
+
+async def test_admin_views_and_cancels_booking(harness: Harness):
+    h = harness
+    await book_nails(h)
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    await h.click(f"my:demo_pay:{booking.id}")
+
+    await h.message("/admin", uid=ADMIN)
+    await h.click("a:view:", uid=ADMIN)
+    assert f"a:vday:{tomorrow_code()}" in h.buttons()
+    await h.click(f"a:vday:{tomorrow_code()}", uid=ADMIN)
+    assert f"a:bk:{booking.id}" in h.buttons()
+    await h.click(f"a:bk:{booking.id}", uid=ADMIN)
+    await h.click(f"a:bk_cancel:{booking.id}", uid=ADMIN)
+    await h.click(f"a:bk_cancel_ok:{booking.id}", uid=ADMIN)
+
+    assert (await h.db.get_booking(booking.id)).status == CANCELLED
+    to_client = [c.text for c in h.session.of(SendMessage) if c.chat_id == CLIENT]
+    assert any("пришлось отменить" in t for t in to_client)
+    # слот снова свободен
+    assert await h.db.busy_intervals(1, booking.start_dt.date(), booking.start_dt.date(), now_local(TZ)) == []
+    assert not h.errors, h.errors
+
+
+async def test_admin_stats_logs_and_digest(harness: Harness):
+    h = harness
+    await book_nails(h)
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    await h.click(f"my:demo_pay:{booking.id}")
+
+    await h.message("/admin", uid=ADMIN)
+    await h.click("a:stats:", uid=ADMIN)
+    stats_text = h.session.calls[-1].text
+    assert "Предстоящих оплаченных записей: <b>1</b>" in stats_text
+
+    h.settings.log_path.write_text(
+        "15.10 12:00:00 INFO bot.handlers.booking: Новая бронь #1\n"
+        "15.10 12:00:01 INFO aiogram.dispatcher: шум библиотеки\n"
+        "15.10 12:00:02 ERROR bot.handlers.common: Ошибка <b>\n"
+        "Traceback (most recent call last):\n",
+        encoding="utf-8",
+    )
+    await h.click("a:logs:all", uid=ADMIN)
+    text = h.session.calls[-1].text
+    assert "Новая бронь #1" in text and "шум" not in text and "&lt;b&gt;" in text
+    await h.click("a:logs:err", uid=ADMIN)
+    text = h.session.calls[-1].text
+    assert "Ошибка" in text and "Новая бронь" not in text
+
+    await jobs.admin_digest(h.bot, h.db, h.settings)
+    digest = [c.text for c in h.session.of(SendMessage) if c.chat_id == ADMIN][-1]
+    assert "Записи на завтра" in digest and "Маникюр + гель-лак" in digest
+    assert not h.errors, h.errors

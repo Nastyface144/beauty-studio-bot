@@ -22,6 +22,13 @@ def _parse_ids(raw: str) -> frozenset[int]:
     return frozenset(ids)
 
 
+def _parse_int(raw: str | None, default: int, lo: int, hi: int) -> int:
+    try:
+        return min(max(int(str(raw).strip()), lo), hi)
+    except (TypeError, ValueError):
+        return default
+
+
 def _parse_time(raw: str, default: time) -> time:
     try:
         hours, minutes = raw.strip().split(":")
@@ -47,13 +54,18 @@ class Settings:
     work_start: time = time(9, 0)
     work_end: time = time(20, 0)
     slot_step_min: int = 30
-    booking_days: int = 14
+    booking_days: int = 30
     min_lead_min: int = 30
     prepay_percent: int = 30
     hold_minutes: int = 15
     cancel_hours: int = 12
 
+    digest_time: time = time(20, 0)
     gallery_dir: Path = field(default=BASE_DIR / "assets" / "gallery")
+
+    @property
+    def log_path(self) -> Path:
+        return self.db_path.parent / "bot.log"
 
     @property
     def payments_enabled(self) -> bool:
@@ -85,4 +97,6 @@ def load_settings() -> Settings:
         studio_map_url=os.getenv("STUDIO_MAP_URL", "").strip(),
         work_start=_parse_time(os.getenv("WORK_START", "09:00"), time(9, 0)),
         work_end=_parse_time(os.getenv("WORK_END", "20:00"), time(20, 0)),
+        booking_days=_parse_int(os.getenv("BOOKING_DAYS"), 30, 1, 60),
+        digest_time=_parse_time(os.getenv("DIGEST_TIME", "20:00"), time(20, 0)),
     )

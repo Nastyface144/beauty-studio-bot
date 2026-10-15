@@ -6,7 +6,7 @@ from html import escape
 from bot.config import Settings
 from bot.database.models import CONFIRMED, PENDING, Booking, Option, Service
 from bot.demo_data import category_title
-from bot.utils.timeutil import human_date, human_dt, human_duration, money
+from bot.utils.timeutil import MONTHS_NOM, WEEKDAYS_FULL, human_date, human_dt, human_duration, money
 
 
 def welcome(settings: Settings, name: str) -> str:
@@ -25,10 +25,11 @@ def main_menu(settings: Settings) -> str:
 
 SESSION_EXPIRED = "🌙 Кажется, страница устарела. Давайте начнём запись заново ✨"
 SLOT_TAKEN = "😔 Ой, это время только что заняли. Пожалуйста, выберите другое."
-NO_SLOTS = (
-    "😔 В ближайшие две недели у мастера нет свободного времени под эту процедуру.\n"
-    "Попробуйте выбрать другого мастера или напишите нам."
-)
+def no_slots(days: int) -> str:
+    return (
+        f"😔 В ближайшие {days} дней у мастера нет свободного времени под эту процедуру.\n"
+        "Попробуйте выбрать другого мастера или напишите нам."
+    )
 
 
 def choose_category() -> str:
@@ -292,30 +293,139 @@ def admin_home(settings: Settings) -> str:
     return f"🛠 <b>Админ-панель · {escape(settings.studio_name)}</b>\n\nВыберите действие:"
 
 
-def admin_day(day, bookings: list[Booking]) -> str:
-    lines = [f"📅 <b>{human_date(day).capitalize()}</b>", ""]
+STATUS_TITLES = {
+    "pending": "⏳ ждёт оплаты",
+    "confirmed": "✅ оплачена",
+    "completed": "🌸 визит состоялся",
+    "cancelled": "❌ отменена",
+    "expired": "⌛️ не оплачена, снята",
+}
+
+
+def admin_day(day, bookings: list[Booking], day_off: bool = False, header: str = "") -> str:
+    lines = [header or f"📅 <b>{human_date(day).capitalize()}</b>", ""]
+    if day_off:
+        lines += ["💤 Выходной по графику", ""]
     if not bookings:
         lines.append("Записей нет 🌿")
+    total = 0
     for b in bookings:
         mark = "✅" if b.status in (CONFIRMED, "completed") else "⏳"
         opts = f" + {escape(b.options_text)}" if b.options_text else ""
+        total += b.price
         lines.append(
             f"{mark} <b>{b.start[-5:]}–{b.end[-5:]}</b> · {escape(b.master_name)}\n"
             f"    {escape(b.service_name)}{opts}\n"
             f"    {_client(b)}"
         )
-    lines += ["", "<i>✅ оплачено · ⏳ ждёт оплаты</i>"]
+    if bookings:
+        lines += ["", f"Записей: {len(bookings)} · на сумму {money(total)}"]
+        lines += ["<i>✅ оплачено · ⏳ ждёт оплаты · нажмите на запись, чтобы открыть</i>"]
     return "\n".join(lines)
 
 
+def admin_digest(day, bookings: list[Booking]) -> str:
+    return admin_day(day, bookings, header=f"🌙 <b>Записи на завтра, {human_date(day)}</b>")
+
+
+def admin_view_pick_day() -> str:
+    return (
+        "📋 <b>Все записи</b>\n\nВыберите дату.\n"
+        "<i>Точка рядом с числом (12•) — в этот день есть записи. 💤 — выходной по графику.</i>"
+    )
+
+
+def admin_booking(b: Booking) -> str:
+    lines = [f"🧾 <b>Запись #{b.id}</b>", "", _admin_card(b), ""]
+    lines.append(f"Статус: {STATUS_TITLES.get(b.status, b.status)}")
+    if b.rating:
+        lines.append(f"Оценка: {'⭐' * b.rating}")
+    return "\n".join(lines)
+
+
+def admin_cancel_confirm(b: Booking) -> str:
+    refund = (
+        f"\n\n💸 Клиент уже внёс предоплату {money(b.prepay)} — её нужно будет вернуть."
+        if b.status == CONFIRMED else ""
+    )
+    return (
+        "Отменить эту запись? Клиент получит сообщение об отмене.\n\n" + _admin_card(b) + refund
+    )
+
+
+def admin_cancelled_by_studio(b: Booking) -> str:
+    refund = f"\n\n💸 Не забудьте вернуть предоплату {money(b.prepay)}" if b.status == CONFIRMED else ""
+    return "❌ <b>Запись отменена администратором</b>\n\n" + _admin_card(b) + refund
+
+
+def client_cancelled_by_studio(b: Booking, settings: Settings) -> str:
+    refund = (
+        f"\nПредоплату {money(b.prepay)} мы вернём — администратор свяжется с вами."
+        if b.status == CONFIRMED else ""
+    )
+    return (
+        "😔 <b>К сожалению, нам пришлось отменить вашу запись</b>\n\n"
+        + booking_card(b, settings, with_status=False)
+        + f"\n{refund}\n\nПросим прощения! Подобрать другое время можно в боте "
+        f"или по телефону {escape(settings.studio_phone)} 🌸"
+    )
+
+
+def admin_stats(st: dict, now) -> str:
+    avg = f"{st['avg_rating']:.1f} ⭐ ({st['ratings']} оценок)" if st["ratings"] else "пока нет"
+    month = MONTHS_NOM[now.month - 1].lower()
+    return "\n".join([
+        "📊 <b>Статистика</b>",
+        "",
+        f"Предстоящих оплаченных записей: <b>{st['upcoming']}</b>",
+        f"Сейчас ждут оплаты: <b>{st['pending']}</b>",
+        "",
+        f"<b>За {month}</b>",
+        f"Визитов (оплаченных): <b>{st['month_visits']}</b>",
+        f"Сумма услуг: <b>{money(st['month_revenue'])}</b>",
+        f"Получено предоплат: <b>{money(st['month_prepay'])}</b>",
+        f"Отмен после оплаты: <b>{st['month_cancelled']}</b>",
+        f"Броней без оплаты (снялись): <b>{st['month_expired']}</b>",
+        "",
+        f"Средняя оценка: <b>{avg}</b>",
+        f"Клиентов в боте: <b>{st['clients']}</b>",
+    ])
+
+
+def admin_logs(lines: list[str], errors_only: bool) -> str:
+    title = "⚠️ <b>Журнал: ошибки и предупреждения</b>" if errors_only else "🧾 <b>Журнал событий</b>"
+    if not lines:
+        return title + "\n\nЗаписей пока нет 🌿"
+    body = escape("\n".join(lines))
+    return f"{title}\n<i>последние события, новые внизу</i>\n\n<pre>{body}</pre>"
+
+
+def admin_weekly(off: set[int]) -> str:
+    names = ", ".join(WEEKDAYS_FULL[d] for d in sorted(off)) if off else "нет"
+    return (
+        "💤 <b>Выходные по дням недели</b>\n\n"
+        "Нажмите на день, чтобы сделать его выходным или рабочим. "
+        "В выходные дни клиенты не смогут записаться.\n\n"
+        f"Сейчас выходные: <b>{names}</b>\n\n"
+        "<i>Уже существующие записи на эти дни не отменяются.</i>"
+    )
+
+
 def admin_close_pick_day() -> str:
-    return "🔒 <b>Закрыть день или время</b>\n\nВыберите дату:\n<i>🔒 — день закрыт целиком</i>"
+    return (
+        "🔒 <b>Закрыть день или время</b>\n\nВыберите дату:\n"
+        "<i>🔒 — день закрыт целиком · 💤 — выходной по графику</i>"
+    )
 
 
-def admin_close_day(day, day_closed: bool, active: int) -> str:
+def admin_close_day(day, day_closed: bool, active: int, day_off: bool = False) -> str:
     lines = [
         f"🔒 <b>{human_date(day).capitalize()}</b>",
         "",
+    ]
+    if day_off:
+        lines += ["💤 Это выходной по графику — запись закрыта. Изменить: «Выходные по дням недели».", ""]
+    lines += [
         "Нажмите на время, чтобы закрыть или открыть его (интервалы по 30 минут). "
         "🔒 — закрыто.",
     ]

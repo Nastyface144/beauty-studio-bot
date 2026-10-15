@@ -1,6 +1,7 @@
 """«Мои записи»: просмотр, отмена, оценка визита."""
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from aiogram import Bot, F, Router
@@ -17,6 +18,7 @@ from bot.utils.notify import notify_admins
 from bot.utils.timeutil import now_local, to_str
 from bot.utils.ui import safe_delete, show
 
+log = logging.getLogger(__name__)
 router = Router(name="my_bookings")
 
 
@@ -91,6 +93,7 @@ async def do_cancel(
         return
     await cb.answer()
     await db.cancel_booking(booking.id)
+    log.info("Клиент %s отменил запись #%s (%s)", cb.from_user.full_name, booking.id, booking.start)
     if booking.status == PENDING:
         await safe_delete(bot, booking.user_id, booking.invoice_message_id)
         await db.set_invoice_message(booking.id, None)
@@ -108,6 +111,7 @@ async def rate(cb: CallbackQuery, callback_data: RateCb, bot: Bot, db: Database,
     if booking is None:
         await cb.answer("Оценка уже учтена, спасибо 💗")
         return
+    log.info("Оценка %s/5 за запись #%s", stars, booking.id)
     await cb.answer("Спасибо! 💗")
     try:
         await cb.message.edit_text(texts.review_thanks(stars), reply_markup=kb.only_menu())

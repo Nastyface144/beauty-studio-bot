@@ -83,6 +83,10 @@ CREATE TABLE IF NOT EXISTS blocks (
     start TEXT NOT NULL,
     end   TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS kv (
+    key   TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS gallery (
     id         INTEGER PRIMARY KEY AUTOINCREMENT,
     category   TEXT NOT NULL,
@@ -475,6 +479,58 @@ class Database:
             {"start": to_str(start), "end": to_str(end), "now": to_str(now)},
         )
         return row["c"]
+
+    # ---------- регулярные выходные ----------
+
+    async def get_weekly_off(self) -> set[int]:
+        """Дни недели (0 = пн … 6 = вс), в которые студия не работает."""
+        row = await self._fetchone("SELECT value FROM kv WHERE key = 'weekly_off'")
+        if not row or not row["value"]:
+            return set()
+        return {int(x) for x in row["value"].split(",") if x.isdigit() and int(x) < 7}
+
+    async def set_weekly_off(self, days: set[int]) -> None:
+        await self.conn.execute(
+            "INSERT INTO kv(key, value) VALUES ('weekly_off', ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (",".join(str(d) for d in sorted(days)),),
+        )
+
+    # ---------- админка: обзор и статистика ----------
+
+    async def booking_counts(self, day_from: date, day_to: date, now: datetime) -> dict[date, int]:
+        """Сколько активных и состоявшихся записей в каждый день периода."""
+        rows = await self._fetchall(
+            f"""SELECT substr(b.start, 1, 10) AS d, COUNT(*) AS c FROM bookings b
+                WHERE b.start >= :lo AND b.start < :hi
+                  AND ({ACTIVE_CONDITION} OR b.status = 'completed')
+                GROUP BY d""",
+            {"lo": date_to_str(day_from), "hi": date_to_str(day_to + timedelta(days=1)), "now": to_str(now)},
+        )
+        return {date.fromisoformat(r["d"]): r["c"] for r in rows}
+
+    async def stats(self, now: datetime) -> dict:
+        month_start = now.replace(day=1, hour=0, minute=0)
+        params = {"now": to_str(now), "month": to_str(month_start)}
+        row = await self._fetchone(
+            """SELECT
+                  (SELECT COUNT(*) FROM bookings b WHERE b.start > :now AND b.status = 'confirmed') AS upcoming,
+                  (SELECT COUNT(*) FROM bookings b WHERE b.status = 'pending' AND b.expires_at > :now) AS pending,
+                  (SELECT COUNT(*) FROM bookings b WHERE b.start >= :month
+                       AND b.status IN ('confirmed', 'completed')) AS month_visits,
+                  (SELECT COALESCE(SUM(b.price), 0) FROM bookings b WHERE b.start >= :month
+                       AND b.status IN ('confirmed', 'completed')) AS month_revenue,
+                  (SELECT COALESCE(SUM(b.prepay), 0) FROM bookings b WHERE b.start >= :month
+                       AND b.status IN ('confirmed', 'completed')) AS month_prepay,
+                  (SELECT COUNT(*) FROM bookings b WHERE b.start >= :month AND b.status = 'cancelled'
+                       AND b.charge_id IS NOT NULL) AS month_cancelled,
+                  (SELECT COUNT(*) FROM bookings b WHERE b.start >= :month AND b.status = 'expired') AS month_expired,
+                  (SELECT AVG(rating) FROM bookings WHERE rating IS NOT NULL) AS avg_rating,
+                  (SELECT COUNT(rating) FROM bookings WHERE rating IS NOT NULL) AS ratings,
+                  (SELECT COUNT(*) FROM users) AS clients""",
+            params,
+        )
+        return dict(row)
 
     # ---------- gallery ----------
 

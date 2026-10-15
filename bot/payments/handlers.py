@@ -99,5 +99,6 @@ async def drop_pending(cb: CallbackQuery, callback_data: MyCb, bot: Bot, db: Dat
     if booking.status == PENDING:
         await db.cancel_booking(booking.id)
         await db.set_invoice_message(booking.id, None)
+        log.info("Клиент %s отменил неоплаченную бронь #%s", cb.from_user.full_name, booking.id)
         await notify_admins(bot, settings, texts.admin_cancelled(booking))
     await show(cb, db, texts.CANCELLED_OK, kb.restart_booking())

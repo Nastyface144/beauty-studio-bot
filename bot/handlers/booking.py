@@ -1,6 +1,7 @@
 """Пошаговая запись: категория → услуга → опции → мастер → дата → время → итог."""
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta
 
@@ -22,6 +23,7 @@ from bot.utils.notify import notify_admins
 from bot.utils.timeutil import now_local
 from bot.utils.ui import safe_delete, show
 
+log = logging.getLogger(__name__)
 router = Router(name="booking")
 
 
@@ -67,8 +69,9 @@ async def _free_by_day(
 ) -> dict[date, list[datetime]]:
     now = now_local(settings.timezone)
     busy = await db.busy_intervals(master_id, days[0], days[-1], now)
+    weekly_off = await db.get_weekly_off()
     return {
-        d: free_starts(
+        d: [] if d.weekday() in weekly_off else free_starts(
             d, duration, busy, now, settings.work_start, settings.work_end,
             settings.slot_step_min, settings.min_lead_min,
         )
@@ -121,7 +124,7 @@ async def render_calendar(
     if note:
         text = f"{note}\n\n{text}"
     if not available:
-        text += "\n\n" + texts.NO_SLOTS
+        text += "\n\n" + texts.no_slots(settings.booking_days)
     await show(cb, db, text, kb.booking_calendar(days, available))
 
 
@@ -315,6 +318,10 @@ async def confirm(cb: CallbackQuery, state: FSMContext, bot: Bot, db: Database, 
         await cb.answer()
         return await show(cb, db, texts.SLOT_TAKEN, kb.slot_taken())
 
+    log.info(
+        "Новая бронь #%s: %s, %s, мастер %s, клиент %s",
+        booking.id, booking.start, booking.service_name, booking.master_name, cb.from_user.full_name,
+    )
     await cb.answer("Время закреплено за вами ✨")
     await state.clear()
     await send_payment(bot, db, settings, booking)

@@ -16,6 +16,7 @@ from bot.handlers import admin, booking, common, gallery, menu, my_bookings
 from bot.handlers.common import on_error
 from bot.payments import handlers as payments
 from bot.scheduler.jobs import setup_scheduler
+from bot.utils.logs import setup_logging
 
 log = logging.getLogger("bot")
 
@@ -51,13 +52,9 @@ def build_dispatcher(db: Database, settings: Settings) -> Dispatcher:
 
 
 async def main() -> None:
-    logging.basicConfig(
-        level=logging.INFO,
-        format="%(asctime)s %(levelname)s %(name)s: %(message)s",
-    )
-    # Планировщик пишет строку на каждый запуск задачи (раз в 30 секунд) — это шум
-    logging.getLogger("apscheduler").setLevel(logging.WARNING)
+    setup_logging()
     settings = load_settings()
+    setup_logging(settings.log_path, settings.timezone)
     if not settings.admin_ids:
         log.warning("ADMIN_ID не задан — уведомления админу и /admin работать не будут")
     if not settings.payments_enabled:
