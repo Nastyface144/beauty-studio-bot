@@ -40,7 +40,7 @@ pause
 exit /b
 
 :nopython
-echo Не найден Python. Установите Python 3.11+ с https://www.python.org/downloads/
+echo Не найден Python. Установите Python 3.10+ с https://www.python.org/downloads/
 echo При установке отметьте галочку "Add python.exe to PATH", затем запустите start.bat снова.
 pause
 exit /b 1

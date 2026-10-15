@@ -5,7 +5,7 @@
 (ЮKassa) и получает напоминания. Администратор получает уведомления и управляет расписанием
 прямо в Telegram.
 
-**Стек:** Python 3.11+, aiogram 3, SQLite (aiosqlite), APScheduler.
+**Стек:** Python 3.10+, aiogram 3, SQLite (aiosqlite), APScheduler.
 
 ## Возможности
 
@@ -72,7 +72,7 @@
    Payments → ЮKassa → Connect ЮKassa: Test**. Скопируйте выданный токен вида `381764678:TEST:...`.
 
 ### Быстрый старт
-Нужен установленный [Python 3.11+](https://www.python.org/downloads/). На Windows при установке
+Нужен установленный [Python 3.10+](https://www.python.org/downloads/). На Windows при установке
 отметьте галочку «Add python.exe to PATH».
 
 - **Windows:** дважды кликните `start.bat`.
@@ -109,6 +109,15 @@ source .venv/bin/activate        # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
 python -m bot
 ```
+
+### На VPS (круглосуточно)
+```bash
+sudo apt update && sudo apt install -y python3-venv unzip   # Ubuntu / Debian
+cd beauty-studio-bot
+./start.sh                              # ввести токен и ID, проверить бота, затем Ctrl+C
+sudo ./deploy/install-service.sh        # автозапуск через systemd
+```
+Логи — `journalctl -u beauty-bot -f`, перезапуск после правки `.env` — `sudo systemctl restart beauty-bot`.
 
 ### Или через Docker
 ```bash

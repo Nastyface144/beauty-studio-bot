@@ -20,9 +20,16 @@ if [ ! -f .env ]; then
   echo "Настройки сохранены в .env (этот файл не попадёт в git). Остальные параметры — в .env.example."
 fi
 
-if [ ! -d .venv ]; then
+if ! python3 -c 'import sys; sys.exit(sys.version_info < (3, 10))' 2>/dev/null; then
+  echo "Нужен Python 3.10 или новее. Сейчас: $(python3 --version 2>&1)"; exit 1
+fi
+
+if [ ! -x .venv/bin/python ]; then
   echo "Готовлю окружение…"
-  python3 -m venv .venv
+  rm -rf .venv
+  python3 -m venv .venv || {
+    echo "Не получилось создать окружение. На Ubuntu/Debian выполните: sudo apt install -y python3-venv"
+    rm -rf .venv; exit 1; }
   .venv/bin/pip install --quiet --upgrade pip
   .venv/bin/pip install --quiet -r requirements.txt
 fi
