@@ -26,6 +26,7 @@ def home() -> InlineKeyboardMarkup:
         [_btn("📅 Сегодня", "today"), _btn("📅 Завтра", "tomorrow")],
         [_btn("📋 Все записи по датам", "view")],
         [_btn("🔒 Закрыть день или время", "close")],
+        [_btn("🏖 Отпуск / закрыть период", "vac")],
         [_btn("💤 Выходные по дням недели", "weekly")],
         [_btn("📊 Статистика", "stats"), _btn("🧾 Журнал", "logs", "all")],
         [_btn("📸 Добавить фото в галерею", "photo")],
@@ -150,3 +151,55 @@ def photo_categories() -> InlineKeyboardMarkup:
 
 def photo_wait() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[[_btn("✅ Готово", "home")]])
+
+
+def _period_code(start: date, end: date) -> str:
+    return day_code(start) + day_code(end)
+
+
+def vacations(periods: list[tuple[date, date]]) -> InlineKeyboardMarkup:
+    rows = [[_btn("➕ Закрыть новый период", "vac_new")]]
+    for start, end in periods[:10]:
+        label = f"{start:%d.%m}" if start == end else f"{start:%d.%m}–{end:%d.%m}"
+        rows.append([_btn(f"🔓 Открыть {label}", "vac_open", _period_code(start, end))])
+    rows.append([back()])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def vac_start_calendar(
+    days: list[date], closed: set[date], weekly_off: set[int], month: tuple[int, int] | None
+) -> InlineKeyboardMarkup:
+    def label(d: date) -> str:
+        if d in closed:
+            return "🔒"
+        if d.weekday() in weekly_off:
+            return "💤"
+        return str(d.day)
+
+    rows = calendar_rows(
+        days, label=label, callback=lambda d: AdminCb(action="vac_s", value=day_code(d)).pack(),
+        month=month, nav=lambda m: AdminCb(action="vac_new", value=month_code(*m)).pack(),
+    )
+    rows.append([back("vac")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def vac_end_calendar(start: date, days: list[date], month: tuple[int, int] | None) -> InlineKeyboardMarkup:
+    days = [d for d in days if d >= start]
+    rows = calendar_rows(
+        days,
+        label=lambda d: f"·{d.day}·" if d == start else str(d.day),
+        callback=lambda d: AdminCb(action="vac_e", value=_period_code(start, d)).pack(),
+        month=month,
+        nav=lambda m: AdminCb(action="vac_s", value=day_code(start) + month_code(*m)).pack(),
+    )
+    rows.append([back("vac_new", _month_of(start), "◀️ Другое начало")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def vac_confirm(start: date, end: date) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [_btn("🔒 Да, закрыть", "vac_ok", _period_code(start, end))],
+        [back("vac_s", day_code(start), "◀️ Изменить даты")],
+        [back("vac", text="✖️ Отмена")],
+    ])

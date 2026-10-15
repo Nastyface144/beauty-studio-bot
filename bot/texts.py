@@ -454,3 +454,69 @@ def admin_photo_saved(category: str) -> str:
 
 def admin_expired(b: Booking) -> str:
     return "⌛️ <b>Бронь снята: не оплачена вовремя</b>\n\n" + _admin_card(b)
+
+
+def period_label(start, end) -> str:
+    if start == end:
+        return f"{start:%d.%m}"
+    return f"{start:%d.%m}–{end:%d.%m}"
+
+
+def _days_word(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return "день"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return "дня"
+    return "дней"
+
+
+def admin_vacations(periods: list, notice: str = "") -> str:
+    lines = []
+    if notice:
+        lines += [notice, ""]
+    lines += ["🏖 <b>Отпуск и закрытые периоды</b>", ""]
+    if periods:
+        lines.append("Сейчас закрыто (запись в эти дни недоступна):")
+        for start, end in periods:
+            n = (end - start).days + 1
+            lines.append(f"• {period_label(start, end)} — {n} {_days_word(n)}")
+        lines += ["", "<i>Нажмите «🔓 Открыть», чтобы вернуть запись на эти дни.</i>"]
+    else:
+        lines.append("Закрытых дней впереди нет 🌿")
+    return "\n".join(lines)
+
+
+def admin_vac_pick_start() -> str:
+    return (
+        "🏖 <b>Закрыть период</b>\n\n"
+        "Шаг 1 из 2: выберите <b>первый</b> нерабочий день.\n"
+        "<i>🔒 — уже закрыто · 💤 — выходной по графику</i>"
+    )
+
+
+def admin_vac_pick_end(start) -> str:
+    return (
+        "🏖 <b>Закрыть период</b>\n\n"
+        f"Начало: <b>{human_date(start)}</b>\n"
+        "Шаг 2 из 2: выберите <b>последний</b> нерабочий день "
+        "(если закрываете один день — нажмите на него же)."
+    )
+
+
+def admin_vac_confirm(start, end, bookings: list[Booking]) -> str:
+    n = (end - start).days + 1
+    lines = [
+        "🏖 <b>Закрыть период?</b>",
+        "",
+        f"С <b>{human_date(start)}</b>",
+        f"по <b>{human_date(end)}</b>",
+        f"Всего: {n} {_days_word(n)}. Клиенты не смогут записаться на эти дни.",
+    ]
+    if bookings:
+        lines += ["", f"⚠️ На эти дни уже есть записи ({len(bookings)}) — закрытие их <b>не отменяет</b>:"]
+        for b in bookings[:10]:
+            lines.append(f"• {b.start_dt:%d.%m %H:%M} · {escape(b.master_name)} · {escape(b.client_name or 'Клиент')}")
+        if len(bookings) > 10:
+            lines.append(f"… и ещё {len(bookings) - 10}")
+        lines.append("Перенесите или отмените их в «📋 Все записи по датам».")
+    return "\n".join(lines)

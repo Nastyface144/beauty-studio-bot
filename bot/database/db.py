@@ -392,6 +392,14 @@ class Database:
         )
         return [_booking(r) for r in rows]
 
+    async def active_between(self, day_from: date, day_to: date, now: datetime) -> list[Booking]:
+        """Активные записи (оплаченные и ждущие оплаты) в период."""
+        rows = await self._fetchall(
+            BOOKING_SELECT + f" WHERE b.start >= :lo AND b.start < :hi AND {ACTIVE_CONDITION} ORDER BY b.start",
+            {"lo": date_to_str(day_from), "hi": date_to_str(day_to + timedelta(days=1)), "now": to_str(now)},
+        )
+        return [_booking(r) for r in rows]
+
     async def expire_pending(self, now: datetime) -> list[Booking]:
         """Снимает брони, которые не оплатили вовремя."""
         async with self._lock:
@@ -461,6 +469,29 @@ class Database:
             if s.strftime("%H:%M") <= day_start and e.strftime("%H:%M") >= day_end and s.date() == e.date():
                 result.add(s.date())
         return result
+
+    async def close_period(self, day_from: date, day_to: date, work_start, work_end) -> int:
+        """Закрывает каждый день периода целиком (отпуск). Возвращает число дней."""
+        days = []
+        d = day_from
+        while d <= day_to:
+            days.append(d)
+            d += timedelta(days=1)
+        async with self._lock:
+            lo = date_to_str(day_from) + " 00:00"
+            hi = date_to_str(day_to + timedelta(days=1)) + " 00:00"
+            await self.conn.execute("DELETE FROM blocks WHERE start < ? AND end > ?", (hi, lo))
+            await self.conn.executemany(
+                "INSERT INTO blocks(start, end) VALUES (?, ?)",
+                [(to_str(datetime.combine(x, work_start)), to_str(datetime.combine(x, work_end))) for x in days],
+            )
+        return len(days)
+
+    async def open_period(self, day_from: date, day_to: date) -> None:
+        """Снимает все закрытия в периоде."""
+        lo = date_to_str(day_from) + " 00:00"
+        hi = date_to_str(day_to + timedelta(days=1)) + " 00:00"
+        await self.conn.execute("DELETE FROM blocks WHERE start < ? AND end > ?", (hi, lo))
 
     async def add_block(self, start: datetime, end: datetime) -> None:
         await self.conn.execute(

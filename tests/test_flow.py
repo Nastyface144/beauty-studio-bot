@@ -115,6 +115,12 @@ class Harness:
                 return c.text
         return ""
 
+    def last_admin(self):
+        for c in reversed(self.session.calls):
+            if isinstance(c, (SendMessage, EditMessageText)) and c.chat_id == ADMIN:
+                return c.text
+        return ""
+
     def buttons(self):
         """callback_data всех кнопок последнего экрана."""
         for c in reversed(self.session.calls):
@@ -511,4 +517,42 @@ async def test_admin_calendars_have_month_arrows(harness: Harness):
     await h.click(f"a:close:{nxt:%Y%m}", uid=ADMIN)
     await h.click(f"a:day:{day_code(nxt)}", uid=ADMIN)
     assert f"a:close:{nxt:%Y%m}" in h.buttons()  # «Назад» возвращает в тот же месяц
+    assert not h.errors, h.errors
+
+
+async def test_vacation_period(harness: Harness):
+    h = harness
+    await book_nails(h)  # запись на завтра 12:00
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    await h.click(f"my:demo_pay:{booking.id}")
+
+    today = now_local(TZ).date()
+    start, end = today + timedelta(days=1), today + timedelta(days=40)  # период через границу месяца
+    await h.message("/admin", uid=ADMIN)
+    await h.click("a:vac:", uid=ADMIN)
+    assert "Закрытых дней впереди нет" in h.last_admin()
+    await h.click("a:vac_new:", uid=ADMIN)
+    await h.click(f"a:vac_s:{day_code(start)}", uid=ADMIN)
+    assert f"a:vac_e:{day_code(start)}{day_code(start)}" in h.buttons()   # можно закрыть один день
+    assert f"a:vac_e:{day_code(start)}{day_code(today)}" not in h.buttons()  # раньше начала нельзя
+    await h.click(f"a:vac_s:{day_code(start)}{end:%Y%m}", uid=ADMIN)       # стрелка к месяцу конца
+    await h.click(f"a:vac_e:{day_code(start)}{day_code(end)}", uid=ADMIN)
+    confirm = h.last_admin()
+    assert "40 дней" in confirm and "уже есть записи (1)" in confirm
+    await h.click(f"a:vac_ok:{day_code(start)}{day_code(end)}", uid=ADMIN)
+    assert "✅ Закрыто" in h.last_admin()
+    assert f"a:vac_open:{day_code(start)}{day_code(end)}" in h.buttons()
+
+    # клиенту эти дни недоступны, существующая запись не отменена
+    assert (await h.db.get_booking(booking.id)).status == CONFIRMED
+    await h.click("m:book", uid=2002)
+    await h.click("b:cat:brows", uid=2002)
+    await h.click("b:srv:5", uid=2002)
+    await h.click("b:mst:1", uid=2002)
+    await h.click(f"b:day:{day_code(start + timedelta(days=3))}", uid=2002)
+    assert not [b for b in h.buttons() if b.startswith("b:time:")]
+
+    await h.click(f"a:vac_open:{day_code(start)}{day_code(end)}", uid=ADMIN)
+    assert "🔓 Открыто" in h.last_admin()
+    assert await h.db.closed_days(start, end, "09:00", "20:00") == set()
     assert not h.errors, h.errors

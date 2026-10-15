@@ -276,6 +276,105 @@ async def toggle_weekday(cb: CallbackQuery, callback_data: AdminCb, db: Database
     await show(cb, db, texts.admin_weekly(off), kb.weekly(off))
 
 
+# ---------- отпуск / закрытие периода ----------
+
+VACATION_DAYS = 180  # насколько вперёд можно закрыть период
+
+
+def _vac_range(settings: Settings) -> list[date]:
+    today = now_local(settings.timezone).date()
+    return [today + timedelta(days=i) for i in range(VACATION_DAYS)]
+
+
+def _group_periods(days: set[date]) -> list[tuple[date, date]]:
+    """Склеивает идущие подряд дни в периоды."""
+    periods: list[tuple[date, date]] = []
+    for d in sorted(days):
+        if periods and d - periods[-1][1] == timedelta(days=1):
+            periods[-1] = (periods[-1][0], d)
+        else:
+            periods.append((d, d))
+    return periods
+
+
+def _parse_period(raw: str) -> tuple[date, date] | None:
+    start, end = _parse_day(raw[:8]), _parse_day(raw[8:16])
+    if start is None or end is None or end < start:
+        return None
+    return start, end
+
+
+async def _closed_in_range(db: Database, settings: Settings, days: list[date]) -> set[date]:
+    return await db.closed_days(days[0], days[-1], f"{settings.work_start:%H:%M}", f"{settings.work_end:%H:%M}")
+
+
+async def render_vacations(cb: CallbackQuery, db: Database, settings: Settings, notice: str = "") -> None:
+    periods = _group_periods(await _closed_in_range(db, settings, _vac_range(settings)))
+    await show(cb, db, texts.admin_vacations(periods, notice), kb.vacations(periods))
+
+
+@router.callback_query(AdminCb.filter(F.action == "vac"))
+async def vacations(cb: CallbackQuery, db: Database, settings: Settings) -> None:
+    await cb.answer()
+    await render_vacations(cb, db, settings)
+
+
+@router.callback_query(AdminCb.filter(F.action == "vac_new"))
+async def vacation_start(cb: CallbackQuery, callback_data: AdminCb, db: Database, settings: Settings) -> None:
+    await cb.answer()
+    days = _vac_range(settings)
+    closed = await _closed_in_range(db, settings, days)
+    markup = kb.vac_start_calendar(days, closed, await db.get_weekly_off(), parse_month_code(callback_data.value))
+    await show(cb, db, texts.admin_vac_pick_start(), markup)
+
+
+@router.callback_query(AdminCb.filter(F.action == "vac_s"))
+async def vacation_end(cb: CallbackQuery, callback_data: AdminCb, db: Database, settings: Settings) -> None:
+    await cb.answer()
+    start = _parse_day(callback_data.value[:8])
+    if start is None:
+        return await render_vacations(cb, db, settings)
+    month = parse_month_code(callback_data.value[8:]) or (start.year, start.month)
+    await show(cb, db, texts.admin_vac_pick_end(start), kb.vac_end_calendar(start, _vac_range(settings), month))
+
+
+@router.callback_query(AdminCb.filter(F.action == "vac_e"))
+async def vacation_confirm(cb: CallbackQuery, callback_data: AdminCb, db: Database, settings: Settings) -> None:
+    await cb.answer()
+    period = _parse_period(callback_data.value)
+    if period is None:
+        return await render_vacations(cb, db, settings)
+    start, end = period
+    bookings = await db.active_between(start, end, now_local(settings.timezone))
+    await show(cb, db, texts.admin_vac_confirm(start, end, bookings), kb.vac_confirm(start, end))
+
+
+@router.callback_query(AdminCb.filter(F.action == "vac_ok"))
+async def vacation_close(cb: CallbackQuery, callback_data: AdminCb, db: Database, settings: Settings) -> None:
+    period = _parse_period(callback_data.value)
+    if period is None:
+        await cb.answer()
+        return await render_vacations(cb, db, settings)
+    start, end = period
+    n = await db.close_period(start, end, settings.work_start, settings.work_end)
+    log.info("Админ %s закрыл период %s – %s (%s дн.)", cb.from_user.id, start, end, n)
+    await cb.answer("Период закрыт 🔒")
+    await render_vacations(cb, db, settings, notice=f"✅ Закрыто: {texts.period_label(start, end)}. Запись на эти дни недоступна.")
+
+
+@router.callback_query(AdminCb.filter(F.action == "vac_open"))
+async def vacation_open(cb: CallbackQuery, callback_data: AdminCb, db: Database, settings: Settings) -> None:
+    period = _parse_period(callback_data.value)
+    if period is None:
+        await cb.answer()
+        return await render_vacations(cb, db, settings)
+    start, end = period
+    await db.open_period(start, end)
+    log.info("Админ %s открыл период %s – %s", cb.from_user.id, start, end)
+    await cb.answer("Период открыт 🔓")
+    await render_vacations(cb, db, settings, notice=f"🔓 Открыто: {texts.period_label(start, end)}. Клиенты снова могут записываться.")
+
+
 # ---------- закрытие дня / времени ----------
 
 @router.callback_query(AdminCb.filter(F.action == "close"))
