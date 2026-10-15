@@ -55,6 +55,8 @@ async def main() -> None:
         level=logging.INFO,
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
     )
+    # Планировщик пишет строку на каждый запуск задачи (раз в 30 секунд) — это шум
+    logging.getLogger("apscheduler").setLevel(logging.WARNING)
     settings = load_settings()
     if not settings.admin_ids:
         log.warning("ADMIN_ID не задан — уведомления админу и /admin работать не будут")
