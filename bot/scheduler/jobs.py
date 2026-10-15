@@ -17,6 +17,7 @@ from bot.config import Settings
 from bot.database.db import Database
 from bot.keyboards import client as kb
 from bot.utils.notify import notify_admins
+from bot.utils.menu import main_menu_screen
 from bot.utils.timeutil import now_local
 from bot.utils.ui import safe_delete, send_screen
 
@@ -29,7 +30,10 @@ async def expire_unpaid(bot: Bot, db: Database, settings: Settings) -> None:
         try:
             await safe_delete(bot, booking.user_id, booking.invoice_message_id)
             await db.set_invoice_message(booking.id, None)
-            await send_screen(bot, db, booking.user_id, texts.hold_expired(booking), kb.restart_booking())
+            await send_screen(
+                bot, db, booking.user_id,
+                *main_menu_screen(settings, booking.user_id, texts.hold_expired(booking)),
+            )
         except TelegramAPIError as e:
             log.warning("Не удалось сообщить клиенту %s о снятии брони: %s", booking.user_id, e)
         await notify_admins(bot, settings, texts.admin_expired(booking))

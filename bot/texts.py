@@ -289,8 +289,9 @@ def _admin_card(b: Booking) -> str:
     )
 
 
-def admin_home(settings: Settings) -> str:
-    return f"🛠 <b>Админ-панель · {escape(settings.studio_name)}</b>\n\nВыберите действие:"
+def admin_home(settings: Settings, notice: str = "") -> str:
+    text = f"🛠 <b>Админ-панель · {escape(settings.studio_name)}</b>\n\nВыберите действие:"
+    return f"{notice}\n\n{text}" if notice else text
 
 
 STATUS_TITLES = {

@@ -13,6 +13,7 @@ from bot.demo_data import CATEGORIES
 from bot.keyboards import client as kb
 from bot.keyboards.callbacks import NOOP, MenuCb
 from bot.utils.ui import safe_delete, show
+from bot.utils.menu import main_menu_screen
 
 router = Router(name="menu")
 
@@ -22,14 +23,17 @@ async def cmd_start(message: Message, state: FSMContext, db: Database, settings:
     await state.clear()
     user = message.from_user
     await db.upsert_user(user.id, user.full_name, user.username)
-    await show(message, db, texts.welcome(settings, user.first_name or user.full_name), kb.main_menu())
+    await show(
+        message, db, texts.welcome(settings, user.first_name or user.full_name),
+        kb.main_menu(is_admin=user.id in settings.admin_ids),
+    )
     await safe_delete(message.bot, message.chat.id, message.message_id)
 
 
 @router.message(Command("menu"))
 async def cmd_menu(message: Message, state: FSMContext, db: Database, settings: Settings) -> None:
     await state.clear()
-    await show(message, db, texts.main_menu(settings), kb.main_menu())
+    await show(message, db, *main_menu_screen(settings, message.from_user.id))
     await safe_delete(message.bot, message.chat.id, message.message_id)
 
 
@@ -37,7 +41,7 @@ async def cmd_menu(message: Message, state: FSMContext, db: Database, settings: 
 async def main_menu(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
     await cb.answer()
     await state.clear()
-    await show(cb, db, texts.main_menu(settings), kb.main_menu())
+    await show(cb, db, *main_menu_screen(settings, cb.from_user.id))
 
 
 @router.callback_query(MenuCb.filter(F.action == "prices"))

@@ -364,10 +364,28 @@ async def test_booking_window_is_30_days(harness: Harness):
     await h.click("b:cat:brows")
     await h.click("b:srv:5")
     await h.click("b:mst:1")
+    today = now_local(TZ).date()
+    last_day = today + timedelta(days=29)
+    # календарь показывает один месяц; остальные — стрелкой ▶️
     days = [b for b in h.buttons() if b.startswith("b:day:")]
-    last = day_code(now_local(TZ).date() + timedelta(days=29))
-    assert f"b:day:{last}" in days
-    assert len(days) >= 29  # сегодня может быть уже закрыто по времени
+    assert all(b[6:12] == f"{today:%Y%m}" for b in days)
+    seen = set(days)
+    if last_day.month != today.month:
+        nxt = f"b:month:{last_day:%Y%m}"
+        assert nxt in h.buttons()
+        await h.click(nxt)
+        days = [b for b in h.buttons() if b.startswith("b:day:")]
+        assert all(b[6:12] == f"{last_day:%Y%m}" for b in days)
+        assert f"b:month:{today:%Y%m}" in h.buttons()  # стрелка назад
+        seen |= set(days)
+    assert f"b:day:{day_code(last_day)}" in seen
+    assert f"b:day:{day_code(last_day + timedelta(days=1))}" not in seen
+    assert len(seen) >= 29  # сегодня может быть уже закрыто по времени
+    # после выбора дня и возврата календарь открывается на месяце выбранного дня
+    await h.click(f"b:day:{day_code(last_day)}")
+    await h.click("b:back:calendar")
+    assert f"b:day:{day_code(last_day)}" in h.buttons()
+    assert not h.errors, h.errors
 
 
 async def test_weekly_day_off(harness: Harness):
@@ -409,6 +427,9 @@ async def test_admin_views_and_cancels_booking(harness: Harness):
     await h.click(f"a:bk_cancel_ok:{booking.id}", uid=ADMIN)
 
     assert (await h.db.get_booking(booking.id)).status == CANCELLED
+    admin_screen = [c.text for c in h.session.of(EditMessageText) if c.chat_id == ADMIN][-1]
+    assert "отменена" in admin_screen and "Админ-панель" in admin_screen
+    assert "вернуть предоплату" in admin_screen
     to_client = [c.text for c in h.session.of(SendMessage) if c.chat_id == CLIENT]
     assert any("пришлось отменить" in t for t in to_client)
     # слот снова свободен
@@ -444,4 +465,50 @@ async def test_admin_stats_logs_and_digest(harness: Harness):
     await jobs.admin_digest(h.bot, h.db, h.settings)
     digest = [c.text for c in h.session.of(SendMessage) if c.chat_id == ADMIN][-1]
     assert "Записи на завтра" in digest and "Маникюр + гель-лак" in digest
+    assert not h.errors, h.errors
+
+
+async def test_finished_actions_return_to_main_menu(harness: Harness):
+    h = harness
+    await book_nails(h)
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    # отказ от неоплаченной брони → главное меню
+    await h.click(f"my:drop:{booking.id}")
+    assert "m:book" in h.buttons() and "m:my" in h.buttons()
+    assert "отменена" in h.last_screen()
+
+    # оплата → меню
+    await book_nails(h)
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    await h.click(f"my:demo_pay:{booking.id}")
+    assert "m:book" in h.buttons() and "Вы записаны" in h.last_screen()
+
+    # отмена клиентом → меню
+    await h.click("m:my")
+    await h.click(f"my:view:{booking.id}")
+    await h.click(f"my:cancel_ok:{booking.id}")
+    assert "m:book" in h.buttons() and "отменена" in h.last_screen()
+
+    # у админа в главном меню есть вход в админку
+    await h.message("/start", uid=ADMIN)
+    assert "a:home:" in h.buttons()
+    await h.message("/start")
+    assert "a:home:" not in h.buttons()
+    assert not h.errors, h.errors
+
+
+async def test_admin_calendars_have_month_arrows(harness: Harness):
+    h = harness
+    today = now_local(TZ).date()
+    nxt = (today.replace(day=1) + timedelta(days=32)).replace(day=1)
+    await h.message("/admin", uid=ADMIN)
+    await h.click("a:view:", uid=ADMIN)
+    assert f"a:view:{nxt:%Y%m}" in h.buttons()
+    await h.click(f"a:view:{nxt:%Y%m}", uid=ADMIN)
+    assert f"a:vday:{day_code(nxt)}" in h.buttons()
+    await h.click("a:close:", uid=ADMIN)
+    assert f"a:close:{nxt:%Y%m}" in h.buttons()
+    await h.click(f"a:close:{nxt:%Y%m}", uid=ADMIN)
+    await h.click(f"a:day:{day_code(nxt)}", uid=ADMIN)
+    assert f"a:close:{nxt:%Y%m}" in h.buttons()  # «Назад» возвращает в тот же месяц
     assert not h.errors, h.errors

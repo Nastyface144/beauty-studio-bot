@@ -5,7 +5,6 @@ import logging
 from datetime import timedelta
 
 from aiogram import Bot, F, Router
-from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot import texts
@@ -15,8 +14,9 @@ from bot.database.models import CONFIRMED, PENDING, Booking
 from bot.keyboards import client as kb
 from bot.keyboards.callbacks import MenuCb, MyCb, RateCb
 from bot.utils.notify import notify_admins
+from bot.utils.menu import main_menu_screen
 from bot.utils.timeutil import now_local, to_str
-from bot.utils.ui import safe_delete, show
+from bot.utils.ui import safe_delete, send_screen, show
 
 log = logging.getLogger(__name__)
 router = Router(name="my_bookings")
@@ -97,7 +97,7 @@ async def do_cancel(
     if booking.status == PENDING:
         await safe_delete(bot, booking.user_id, booking.invoice_message_id)
         await db.set_invoice_message(booking.id, None)
-    await show(cb, db, texts.CANCELLED_OK, kb.after_cancel())
+    await show(cb, db, *main_menu_screen(settings, cb.from_user.id, texts.CANCELLED_OK))
     await notify_admins(bot, settings, texts.admin_cancelled(booking))
 
 
@@ -113,8 +113,8 @@ async def rate(cb: CallbackQuery, callback_data: RateCb, bot: Bot, db: Database,
         return
     log.info("Оценка %s/5 за запись #%s", stars, booking.id)
     await cb.answer("Спасибо! 💗")
-    try:
-        await cb.message.edit_text(texts.review_thanks(stars), reply_markup=kb.only_menu())
-    except TelegramBadRequest:  # сообщение могло быть удалено — оценка уже сохранена
-        pass
+    # Просьба об оценке была отдельным сообщением — убираем её и показываем меню с благодарностью
+    await send_screen(bot, db, cb.from_user.id, *main_menu_screen(settings, cb.from_user.id, texts.review_thanks(stars)))
+    if cb.message:
+        await safe_delete(bot, cb.from_user.id, cb.message.message_id)
     await notify_admins(bot, settings, texts.admin_rating(booking, stars))

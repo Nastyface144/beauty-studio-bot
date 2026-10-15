@@ -11,10 +11,10 @@ from bot import texts
 from bot.config import Settings
 from bot.database.db import Database
 from bot.database.models import PENDING
-from bot.keyboards import client as kb
 from bot.keyboards.callbacks import MyCb
 from bot.payments.service import finalize_payment, parse_payload, send_payment
 from bot.utils.notify import notify_admins
+from bot.utils.menu import main_menu_screen
 from bot.utils.timeutil import now_local, to_str
 from bot.utils.ui import safe_delete, show
 
@@ -101,4 +101,4 @@ async def drop_pending(cb: CallbackQuery, callback_data: MyCb, bot: Bot, db: Dat
         await db.set_invoice_message(booking.id, None)
         log.info("Клиент %s отменил неоплаченную бронь #%s", cb.from_user.full_name, booking.id)
         await notify_admins(bot, settings, texts.admin_cancelled(booking))
-    await show(cb, db, texts.CANCELLED_OK, kb.restart_booking())
+    await show(cb, db, *main_menu_screen(settings, cb.from_user.id, texts.CANCELLED_OK))

@@ -8,8 +8,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.database.models import CONFIRMED, Booking
 from bot.demo_data import CATEGORIES, category_title
-from bot.keyboards.calendar import calendar_rows, day_code
-from bot.keyboards.callbacks import AdminCb
+from bot.keyboards.calendar import calendar_rows, day_code, month_code
+from bot.keyboards.callbacks import AdminCb, MenuCb
 from bot.utils.timeutil import WEEKDAYS_FULL
 
 
@@ -29,7 +29,12 @@ def home() -> InlineKeyboardMarkup:
         [_btn("💤 Выходные по дням недели", "weekly")],
         [_btn("📊 Статистика", "stats"), _btn("🧾 Журнал", "logs", "all")],
         [_btn("📸 Добавить фото в галерею", "photo")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data=MenuCb(action="main").pack())],
     ])
+
+
+def _month_of(day: date) -> str:
+    return month_code(day.year, day.month)
 
 
 def day_view(day: date, bookings: list[Booking]) -> InlineKeyboardMarkup:
@@ -44,12 +49,14 @@ def day_view(day: date, bookings: list[Booking]) -> InlineKeyboardMarkup:
         _btn("🔄", "vday", day_code(day)),
         _btn(f"{next_day:%d.%m} ▶️", "vday", day_code(next_day)),
     ])
-    rows.append([_btn("📅 Другая дата", "view")])
+    rows.append([_btn("📅 Календарь", "view", _month_of(day))])
     rows.append([back(text="◀️ В админку")])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def view_calendar(days: list[date], counts: dict[date, int], weekly_off: set[int]) -> InlineKeyboardMarkup:
+def view_calendar(
+    days: list[date], counts: dict[date, int], weekly_off: set[int], month: tuple[int, int] | None
+) -> InlineKeyboardMarkup:
     def label(d: date) -> str:
         if counts.get(d):
             return f"{d.day}•"
@@ -57,7 +64,10 @@ def view_calendar(days: list[date], counts: dict[date, int], weekly_off: set[int
             return "💤"
         return str(d.day)
 
-    rows = calendar_rows(days, label=label, callback=lambda d: AdminCb(action="vday", value=day_code(d)).pack())
+    rows = calendar_rows(
+        days, label=label, callback=lambda d: AdminCb(action="vday", value=day_code(d)).pack(),
+        month=month, nav=lambda m: AdminCb(action="view", value=month_code(*m)).pack(),
+    )
     rows.append([back()])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -77,7 +87,9 @@ def booking_cancel_confirm(b: Booking) -> InlineKeyboardMarkup:
     ])
 
 
-def close_calendar(days: list[date], closed: set[date], weekly_off: set[int]) -> InlineKeyboardMarkup:
+def close_calendar(
+    days: list[date], closed: set[date], weekly_off: set[int], month: tuple[int, int] | None
+) -> InlineKeyboardMarkup:
     def label(d: date) -> str:
         if d in closed:
             return "🔒"
@@ -85,7 +97,10 @@ def close_calendar(days: list[date], closed: set[date], weekly_off: set[int]) ->
             return "💤"
         return str(d.day)
 
-    rows = calendar_rows(days, label=label, callback=lambda d: AdminCb(action="day", value=day_code(d)).pack())
+    rows = calendar_rows(
+        days, label=label, callback=lambda d: AdminCb(action="day", value=day_code(d)).pack(),
+        month=month, nav=lambda m: AdminCb(action="close", value=month_code(*m)).pack(),
+    )
     rows.append([back()])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -98,7 +113,7 @@ def close_day(day: date, slots: list[datetime], closed_slots: set[datetime], day
     kb.adjust(4)
     kb.row(_btn("🔓 Открыть весь день" if day_closed else "🔒 Закрыть весь день", "day_toggle", day_code(day)))
     kb.row(_btn("📋 Записи на этот день", "vday", day_code(day)))
-    kb.row(back("close"))
+    kb.row(back("close", _month_of(day)))
     return kb.as_markup()
 
 

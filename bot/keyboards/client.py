@@ -9,8 +9,8 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 from bot.config import Settings
 from bot.database.models import CONFIRMED, PENDING, Booking, Master, Option, Service
 from bot.demo_data import CATEGORIES, category_title
-from bot.keyboards.calendar import calendar_rows, day_code
-from bot.keyboards.callbacks import BookCb, GalleryCb, MenuCb, MyCb, RateCb
+from bot.keyboards.calendar import calendar_rows, day_code, month_code
+from bot.keyboards.callbacks import AdminCb, BookCb, GalleryCb, MenuCb, MyCb, RateCb
 from bot.utils.timeutil import WEEKDAYS_SHORT, money
 
 
@@ -26,12 +26,15 @@ def menu_btn() -> InlineKeyboardButton:
     return _btn("🏠 В меню", MenuCb(action="main"))
 
 
-def main_menu() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
+def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
+    rows = [
         [_btn("💅 Записаться", MenuCb(action="book"))],
         [_btn("📋 Мои записи", MenuCb(action="my")), _btn("💰 Услуги и цены", MenuCb(action="prices"))],
         [_btn("📸 Наши работы", MenuCb(action="gallery")), _btn("📍 Контакты", MenuCb(action="contacts"))],
-    ])
+    ]
+    if is_admin:
+        rows.append([_btn("🛠 Админ-панель", AdminCb(action="home"))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def only_menu() -> InlineKeyboardMarkup:
@@ -87,11 +90,13 @@ def masters(items: list[Master], back_to: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def booking_calendar(days: list[date], available: set[date]) -> InlineKeyboardMarkup:
+def booking_calendar(days: list[date], available: set[date], month: tuple[int, int] | None) -> InlineKeyboardMarkup:
     rows = calendar_rows(
         days,
         label=lambda d: str(d.day) if d in available else None,
         callback=lambda d: BookCb(action="day", value=day_code(d)).pack(),
+        month=month,
+        nav=lambda m: BookCb(action="month", value=month_code(*m)).pack(),
     )
     rows.append([back_btn(BookCb(action="back", value="masters"))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
@@ -174,20 +179,6 @@ def cancel_confirm(b: Booking) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
         [_btn("Да, отменить", MyCb(action="cancel_ok", booking_id=b.id))],
         [back_btn(MyCb(action="view", booking_id=b.id), "◀️ Нет, оставить")],
-    ])
-
-
-def after_cancel() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("📋 Мои записи", MenuCb(action="my"))],
-        [menu_btn()],
-    ])
-
-
-def after_payment() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("📋 Мои записи", MenuCb(action="my"))],
-        [menu_btn()],
     ])
 
 

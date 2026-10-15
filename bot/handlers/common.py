@@ -8,10 +8,9 @@ from aiogram.exceptions import TelegramAPIError
 from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, ErrorEvent, Message
 
-from bot import texts
 from bot.config import Settings
 from bot.database.db import Database
-from bot.keyboards import client as kb
+from bot.utils.menu import main_menu_screen
 from bot.utils.ui import safe_delete, show
 
 log = logging.getLogger(__name__)
@@ -40,7 +39,7 @@ async def fallback(message: Message, state: FSMContext, db: Database, settings: 
     if message.successful_payment:
         return
     await state.clear()
-    await show(message, db, texts.main_menu(settings), kb.main_menu())
+    await show(message, db, *main_menu_screen(settings, message.from_user.id))
     await safe_delete(message.bot, message.chat.id, message.message_id)
 
 
@@ -49,4 +48,4 @@ async def stale_button(cb: CallbackQuery, state: FSMContext, db: Database, setti
     """Кнопка из старого сообщения, которую уже нечем обработать."""
     await cb.answer("Эта кнопка устарела — открываю меню ✨")
     await state.clear()
-    await show(cb, db, texts.main_menu(settings), kb.main_menu())
+    await show(cb, db, *main_menu_screen(settings, cb.from_user.id))

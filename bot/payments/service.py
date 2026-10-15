@@ -81,8 +81,10 @@ async def finalize_payment(
     await db.set_invoice_message(booking.id, None)
 
     if ok:
-        await send_screen(bot, db, booking.user_id, texts.payment_success(booking, settings), kb.after_payment())
+        menu = kb.main_menu(is_admin=booking.user_id in settings.admin_ids)
+        await send_screen(bot, db, booking.user_id, texts.payment_success(booking, settings), menu)
         await notify_admins(bot, settings, texts.admin_paid(booking))
     else:
-        await send_screen(bot, db, booking.user_id, texts.payment_conflict(), kb.only_menu())
+        menu = kb.main_menu(is_admin=booking.user_id in settings.admin_ids)
+        await send_screen(bot, db, booking.user_id, texts.payment_conflict(), menu)
         await notify_admins(bot, settings, texts.admin_conflict(booking))
