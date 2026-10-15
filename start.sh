@@ -34,5 +34,5 @@ if [ ! -x .venv/bin/python ]; then
   .venv/bin/pip install --quiet -r requirements.txt
 fi
 
-echo "Бот запущен. Напишите ему /start в Telegram. Остановить — Ctrl+C."
+echo "Запускаю бота… Когда появится строка «Бот @… запущен», напишите ему /start в Telegram. Остановить — Ctrl+C."
 exec .venv/bin/python -m bot

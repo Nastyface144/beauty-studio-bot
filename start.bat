@@ -34,7 +34,7 @@ python -m venv .venv
 if errorlevel 1 goto pipfail
 
 :run
-echo Бот запущен. Напишите ему /start в Telegram. Остановить - Ctrl+C.
+echo Запускаю бота... Когда появится строка "Бот @... запущен", напишите ему /start в Telegram. Остановить - Ctrl+C.
 .venv\Scripts\python -m bot
 pause
 exit /b
