@@ -7,7 +7,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.exceptions import TelegramAPIError
+from aiogram.exceptions import TelegramAPIError, TelegramNetworkError, TelegramUnauthorizedError
 from aiogram.types import BotCommand, BotCommandScopeChat, BotCommandScopeDefault
 
 from bot.config import Settings, load_settings
@@ -70,12 +70,18 @@ async def main() -> None:
 
     scheduler = setup_scheduler(bot, db, settings)
     try:
+        try:
+            me = await bot.get_me()
+        except TelegramUnauthorizedError:
+            raise RuntimeError("Telegram не принял BOT_TOKEN. Проверьте токен в .env (его выдаёт @BotFather).")
+        except TelegramNetworkError as e:
+            raise RuntimeError(f"Не удалось подключиться к Telegram: {e}. Проверьте интернет или VPN.")
         await _set_commands(bot, settings.admin_ids)
         scheduler.start()
-        me = await bot.get_me()
-        log.info("Бот @%s запущен", me.username)
+        log.info("Бот @%s запущен. Откройте https://t.me/%s и нажмите /start", me.username, me.username)
         await dp.start_polling(bot, allowed_updates=dp.resolve_used_update_types())
     finally:
-        scheduler.shutdown(wait=False)
+        if scheduler.running:
+            scheduler.shutdown(wait=False)
         await bot.session.close()
         await db.close()

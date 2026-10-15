@@ -71,6 +71,19 @@
 3. *(Необязательно)* Подключите тестовые платежи: @BotFather → ваш бот → **Bot Settings →
    Payments → ЮKassa → Connect ЮKassa: Test**. Скопируйте выданный токен вида `381764678:TEST:...`.
 
+### Быстрый старт
+Нужен установленный [Python 3.11+](https://www.python.org/downloads/). На Windows при установке
+отметьте галочку «Add python.exe to PATH».
+
+- **Windows:** дважды кликните `start.bat`.
+- **macOS / Linux:** выполните `./start.sh` в терминале.
+
+При первом запуске скрипт спросит токен бота, ваш Telegram ID и (по желанию) платёжный токен,
+сохранит их в `.env` и установит зависимости. Потом откройте бота в Telegram и нажмите `/start`.
+Бот работает, пока открыто окно со скриптом.
+
+Ниже — то же самое вручную.
+
 ### 2. Настройка
 ```bash
 git clone https://github.com/Nastyface144/beauty-studio-bot.git
