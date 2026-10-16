@@ -61,7 +61,7 @@ def choose_date(master_name: str, duration: int) -> str:
         f"📅 Выберите дату\n\n"
         f"Мастер: <b>{escape(master_name)}</b>\n"
         f"Длительность: <b>{human_duration(duration)}</b>\n\n"
-        "<i>✕ — нет свободного времени</i>"
+        "<i>✕ — всё занято · бледные числа — студия не работает</i>"
     )
 
 
@@ -69,8 +69,8 @@ def choose_time(day, duration: int) -> str:
     return (
         f"🕐 Выберите время\n\n"
         f"<b>{human_date(day).capitalize()}</b>\n"
-        f"Процедура займёт {human_duration(duration)}, "
-        "показываю только то время, куда она помещается целиком."
+        f"Процедура займёт {human_duration(duration)}.\n\n"
+        "<i>✕ — время занято</i>"
     )
 
 

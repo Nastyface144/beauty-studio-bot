@@ -4,9 +4,8 @@ from __future__ import annotations
 from datetime import date, timedelta
 from typing import Callable
 
-from aiogram.types import InlineKeyboardButton
+from aiogram.types import DisabledButton, InlineKeyboardButton
 
-from bot.keyboards.callbacks import NOOP
 from bot.utils.timeutil import MONTHS_NOM, WEEKDAYS_SHORT
 
 
@@ -46,7 +45,8 @@ def pick_month(days: list[date], wanted: tuple[int, int] | None) -> tuple[int, i
 
 
 def _noop(text: str) -> InlineKeyboardButton:
-    return InlineKeyboardButton(text=text, callback_data=NOOP)
+    """Неактивная кнопка: нажать нельзя, Telegram показывает её приглушённой."""
+    return InlineKeyboardButton(text=text, disabled=DisabledButton())
 
 
 def calendar_rows(
@@ -55,12 +55,14 @@ def calendar_rows(
     callback: Callable[[date], str],
     month: tuple[int, int] | None = None,
     nav: Callable[[tuple[int, int]], str] | None = None,
+    inactive: Callable[[date], bool] | None = None,
 ) -> list[list[InlineKeyboardButton]]:
     """Календарь на один месяц: ◀️ Месяц ▶️, дни недели и сетка по неделям.
 
     Показываются только дни диапазона `days`, попавшие в `month`. Стрелки листают
     к соседним месяцам диапазона (callback из `nav`). `label(d)` возвращает текст
-    кнопки для доступного дня или None для недоступного.
+    кнопки для доступного дня или None для занятого (✕). `inactive(d)` — нерабочий день:
+    число показывается неактивной (серой) кнопкой.
     """
     months = months_of(days)
     month = pick_month(days, month)
@@ -88,6 +90,8 @@ def calendar_rows(
         for _ in range(7):
             if cursor not in in_range:
                 row.append(_noop(" "))
+            elif inactive is not None and inactive(cursor):
+                row.append(_noop(str(cursor.day)))
             else:
                 text = label(cursor)
                 if text is None:

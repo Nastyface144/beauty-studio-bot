@@ -11,6 +11,35 @@ def overlaps(a_start: datetime, a_end: datetime, b_start: datetime, b_end: datet
     return a_start < b_end and b_start < a_end
 
 
+def day_grid(
+    day: date,
+    duration_min: int,
+    busy: Iterable[Interval],
+    now: datetime,
+    work_start: time,
+    work_end: time,
+    step_min: int = 30,
+    min_lead_min: int = 30,
+) -> list[tuple[datetime, bool]]:
+    """Сетка времени дня для показа клиенту: (начало, свободно ли).
+
+    Включает все ещё не прошедшие начала, при которых процедура укладывается в рабочий день;
+    занятые помечены False, чтобы показать их крестиком."""
+    if duration_min <= 0:
+        return []
+    free = set(free_starts(day, duration_min, busy, now, work_start, work_end, step_min, min_lead_min))
+    earliest = now + timedelta(minutes=min_lead_min)
+    length = timedelta(minutes=duration_min)
+    step = timedelta(minutes=step_min)
+    grid = []
+    start = datetime.combine(day, work_start)
+    while start + length <= datetime.combine(day, work_end):
+        if start >= earliest:
+            grid.append((start, start in free))
+        start += step
+    return grid
+
+
 def free_starts(
     day: date,
     duration_min: int,

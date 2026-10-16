@@ -18,7 +18,7 @@ from bot.keyboards import client as kb
 from bot.keyboards.calendar import day_code, parse_day_code, parse_month_code
 from bot.keyboards.callbacks import BookCb, MenuCb
 from bot.payments.service import calc_prepay, send_payment
-from bot.services.slots import free_starts
+from bot.services.slots import day_grid, free_starts
 from bot.utils.notify import notify_admins
 from bot.utils.menu import main_menu_screen
 from bot.utils.timeutil import now_local
@@ -80,6 +80,13 @@ async def _free_by_day(
     }
 
 
+async def _days_off(db: Database, settings: Settings, days: list[date]) -> set[date]:
+    """Нерабочие дни: выходные по графику и закрытые целиком (в том числе отпуск)."""
+    weekly_off = await db.get_weekly_off()
+    closed = await db.closed_days(days[0], days[-1], f"{settings.work_start:%H:%M}", f"{settings.work_end:%H:%M}")
+    return {d for d in days if d.weekday() in weekly_off or d in closed}
+
+
 # ---------- экраны шагов ----------
 
 async def render_categories(cb: CallbackQuery, db: Database) -> None:
@@ -122,12 +129,13 @@ async def render_calendar(
     days = _booking_days(settings)
     free = await _free_by_day(db, settings, sel.master.id, sel.duration, days)
     available = {d for d, starts in free.items() if starts}
+    day_off = await _days_off(db, settings, days)
     text = texts.choose_date(sel.master.name, sel.duration)
     if note:
         text = f"{note}\n\n{text}"
     if not available:
         text += "\n\n" + texts.no_slots(settings.booking_days)
-    await show(cb, db, text, kb.booking_calendar(days, available, _calendar_month(data, available)))
+    await show(cb, db, text, kb.booking_calendar(days, available, _calendar_month(data, available), day_off))
 
 
 def _calendar_month(data: dict, available: set[date]) -> tuple[int, int] | None:
@@ -152,7 +160,13 @@ async def render_times(cb: CallbackQuery, state: FSMContext, db: Database, setti
     starts = (await _free_by_day(db, settings, sel.master.id, sel.duration, [day]))[day]
     if not starts:
         return await render_calendar(cb, state, db, settings, note="😔 На этот день свободного времени уже нет.")
-    await show(cb, db, texts.choose_time(day, sel.duration), kb.times(starts))
+    now = now_local(settings.timezone)
+    busy = await db.busy_intervals(sel.master.id, day, day, now)
+    grid = day_grid(
+        day, sel.duration, busy, now, settings.work_start, settings.work_end,
+        settings.slot_step_min, settings.min_lead_min,
+    )
+    await show(cb, db, texts.choose_time(day, sel.duration), kb.times(grid))
 
 
 async def render_summary(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:

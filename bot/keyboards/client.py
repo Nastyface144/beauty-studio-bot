@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import date, datetime
 
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+from aiogram.types import DisabledButton, InlineKeyboardButton, InlineKeyboardMarkup
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from bot.config import Settings
@@ -90,9 +90,12 @@ def masters(items: list[Master], back_to: str) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def booking_calendar(days: list[date], available: set[date], month: tuple[int, int] | None) -> InlineKeyboardMarkup:
+def booking_calendar(
+    days: list[date], available: set[date], month: tuple[int, int] | None, day_off: set[date] = frozenset()
+) -> InlineKeyboardMarkup:
     rows = calendar_rows(
         days,
+        inactive=lambda d: d in day_off,
         label=lambda d: str(d.day) if d in available else None,
         callback=lambda d: BookCb(action="day", value=day_code(d)).pack(),
         month=month,
@@ -102,10 +105,13 @@ def booking_calendar(days: list[date], available: set[date], month: tuple[int, i
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def times(starts: list[datetime]) -> InlineKeyboardMarkup:
+def times(grid: list[tuple[datetime, bool]]) -> InlineKeyboardMarkup:
     kb = InlineKeyboardBuilder()
-    for s in starts:
-        kb.button(text=s.strftime("%H:%M"), callback_data=BookCb(action="time", value=s.strftime("%H%M")))
+    for start, free in grid:
+        if free:
+            kb.button(text=start.strftime("%H:%M"), callback_data=BookCb(action="time", value=start.strftime("%H%M")))
+        else:
+            kb.add(InlineKeyboardButton(text="✕", disabled=DisabledButton()))  # занято — нажать нельзя
     kb.adjust(4)
     kb.row(back_btn(BookCb(action="back", value="calendar")))
     return kb.as_markup()

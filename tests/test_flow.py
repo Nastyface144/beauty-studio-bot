@@ -641,3 +641,57 @@ async def test_migration_adds_payment_method(tmp_path):
     booking = await database.get_booking(1)
     assert booking.payment_method == "online" and booking.refund_due
     await database.close()
+
+
+def _last_markup(h: Harness):
+    for c in reversed(h.session.calls):
+        markup = getattr(c, "reply_markup", None)
+        if markup is not None and getattr(c, "chat_id", None) == CLIENT:
+            return [b for row in markup.inline_keyboard for b in row]
+    return []
+
+
+async def test_busy_time_shown_as_disabled_cross(harness: Harness):
+    h = harness
+    await book_nails(h)  # Анна, завтра 12:00–14:15
+    await h.click("m:book", uid=2002)
+    await h.click("b:cat:brows", uid=2002)
+    await h.click("b:srv:6", uid=2002)          # 60 минут
+    await h.click("b:mst:1", uid=2002)
+    await h.click(f"b:day:{tomorrow_code()}", uid=2002)
+    markup = []
+    for c in reversed(h.session.calls):
+        if getattr(c, "chat_id", None) == 2002 and getattr(c, "reply_markup", None):
+            markup = [b for row in c.reply_markup.inline_keyboard for b in row]
+            break
+    texts_ = [b.text for b in markup]
+    # занято 12:00–14:15: часовая процедура не влезает с 11:30 по 14:00 → крестики на их месте
+    assert texts_[:5] == ["09:00", "09:30", "10:00", "10:30", "11:00"]
+    crosses = [b for b in markup if b.text == "✕"]
+    assert len(crosses) == 6  # 11:30, 12:00, 12:30, 13:00, 13:30, 14:00
+    assert all(b.disabled is not None and b.callback_data is None for b in crosses)
+    assert "14:30" in texts_ and "19:00" in texts_
+    assert not h.errors, h.errors
+
+
+async def test_days_off_are_grey_and_unclickable(harness: Harness):
+    h = harness
+    tomorrow = now_local(TZ).date() + timedelta(days=1)
+    in_two = tomorrow + timedelta(days=1)
+    await h.db.set_weekly_off({tomorrow.weekday()})
+    await h.db.close_period(in_two, in_two, h.settings.work_start, h.settings.work_end)
+    await h.message("/start")
+    await h.click("m:book")
+    await h.click("b:cat:brows")
+    await h.click("b:srv:5")
+    await h.click("b:mst:1")
+    if tomorrow.month != now_local(TZ).month:
+        await h.click(f"b:month:{tomorrow:%Y%m}")
+    markup = _last_markup(h)
+    for d in (tomorrow, in_two):
+        if d.month != tomorrow.month:
+            continue
+        cell = [b for b in markup if b.text == str(d.day) and b.callback_data is None]
+        assert cell and cell[0].disabled is not None, d
+        assert f"b:day:{day_code(d)}" not in [b.callback_data for b in markup]
+    assert not h.errors, h.errors
