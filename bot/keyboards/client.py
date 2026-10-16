@@ -111,12 +111,18 @@ def times(starts: list[datetime]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def summary() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("💳 Подтвердить и оплатить", BookCb(action="confirm"))],
-        [back_btn(BookCb(action="back", value="times"))],
-        [_btn("✖️ Отменить запись", MenuCb(action="main"))],
-    ])
+def summary(settings: Settings, prepay: int) -> InlineKeyboardMarkup:
+    rows = []
+    online, on_site = settings.online_available, settings.on_site_available
+    if online:
+        text = f"💳 Предоплата онлайн {money(prepay)}" if on_site else f"💳 Подтвердить и оплатить {money(prepay)}"
+        rows.append([_btn(text, BookCb(action="confirm", value="online"))])
+    if on_site:
+        text = "💵 Оплачу в студии" if online else "✅ Записаться"
+        rows.append([_btn(text, BookCb(action="confirm", value="cash"))])
+    rows.append([back_btn(BookCb(action="back", value="times"))])
+    rows.append([_btn("✖️ Отменить запись", MenuCb(action="main"))])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def slot_taken() -> InlineKeyboardMarkup:

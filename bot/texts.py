@@ -91,11 +91,24 @@ def summary(
         f"⏳ Длительность: <b>{human_duration(duration)}</b>",
         "",
         f"💰 Итого: <b>{money(price)}</b>",
-        f"💳 Предоплата {settings.prepay_percent}%: <b>{money(prepay)}</b>",
         "",
-        f"<i>После подтверждения время закрепится за вами на {settings.hold_minutes} минут — "
-        "за это время нужно внести предоплату.</i>",
     ]
+    online, on_site = settings.online_available, settings.on_site_available
+    if online and on_site:
+        lines += [
+            "<b>Как удобнее оплатить?</b>",
+            f"💳 Онлайн — предоплата {settings.prepay_percent}% (<b>{money(prepay)}</b>), остальное в студии. "
+            f"Время закрепится за вами на {settings.hold_minutes} минут, пока вы оплачиваете.",
+            "💵 В студии — всю сумму мастеру, наличными или картой.",
+        ]
+    elif online:
+        lines += [
+            f"💳 Предоплата {settings.prepay_percent}%: <b>{money(prepay)}</b>",
+            f"<i>После подтверждения время закрепится за вами на {settings.hold_minutes} минут — "
+            "за это время нужно внести предоплату.</i>",
+        ]
+    else:
+        lines.append("💵 Оплата в студии — наличными или картой мастеру.")
     return "\n".join(lines)
 
 
@@ -111,8 +124,10 @@ def booking_card(b: Booking, settings: Settings, with_status: bool = True) -> st
         f"⏳ {human_duration(b.duration)} · {money(b.price)}",
     ]
     if with_status:
-        if b.status == CONFIRMED:
-            lines.append(f"✅ Предоплата {money(b.prepay)} внесена")
+        if b.status == CONFIRMED and b.pay_on_site:
+            lines.append(f"💵 Оплата в студии: {money(b.price)}")
+        elif b.status == CONFIRMED:
+            lines.append(f"✅ Предоплата {money(b.prepay)} внесена, в студии — {money(b.price - b.prepay)}")
         elif b.status == PENDING:
             lines.append(f"⏳ Ожидает предоплаты {money(b.prepay)} до {b.expires_at[-5:]}")
     return "\n".join(lines)
@@ -160,7 +175,7 @@ def my_bookings(has_any: bool) -> str:
 def cancel_confirm(b: Booking, settings: Settings) -> str:
     refund = (
         f"\n\nПредоплата {money(b.prepay)} будет возвращена — администратор свяжется с вами."
-        if b.status == CONFIRMED else ""
+        if b.refund_due else ""
     )
     return "Точно отменить запись?\n\n" + booking_card(b, settings, with_status=False) + refund
 
@@ -254,7 +269,9 @@ def _client(b: Booking) -> str:
 
 
 def admin_new_booking(b: Booking) -> str:
-    return "🆕 <b>Новая бронь (ждёт оплаты)</b>\n\n" + _admin_card(b)
+    if b.pay_on_site:
+        return "🆕 <b>Новая запись</b> · 💵 оплата в студии\n\n" + _admin_card(b)
+    return "🆕 <b>Новая бронь (ждёт предоплаты)</b>\n\n" + _admin_card(b)
 
 
 def admin_paid(b: Booking) -> str:
@@ -269,7 +286,7 @@ def admin_conflict(b: Booking) -> str:
 
 
 def admin_cancelled(b: Booking) -> str:
-    refund = f"\n\n💸 Нужно вернуть предоплату {money(b.prepay)}" if b.status == CONFIRMED else ""
+    refund = f"\n\n💸 Нужно вернуть предоплату {money(b.prepay)}" if b.refund_due else ""
     return "❌ <b>Клиент отменил запись</b>\n\n" + _admin_card(b) + refund
 
 
@@ -284,7 +301,7 @@ def _admin_card(b: Booking) -> str:
         f"💅 {escape(b.service_name)}{opts}\n"
         f"👩‍🎨 {escape(b.master_name)}\n"
         f"📅 {human_dt(b.start_dt)} ({human_duration(b.duration)})\n"
-        f"💰 {money(b.price)}, предоплата {money(b.prepay)}\n"
+        f"💰 {money(b.price)}, " + ("оплата в студии" if b.pay_on_site else f"предоплата {money(b.prepay)}") + "\n"
         f"#запись{b.id}"
     )
 
@@ -295,8 +312,8 @@ def admin_home(settings: Settings, notice: str = "") -> str:
 
 
 STATUS_TITLES = {
-    "pending": "⏳ ждёт оплаты",
-    "confirmed": "✅ оплачена",
+    "pending": "⏳ ждёт предоплаты",
+    "confirmed": "✅ подтверждена",
     "completed": "🌸 визит состоялся",
     "cancelled": "❌ отменена",
     "expired": "⌛️ не оплачена, снята",
@@ -311,7 +328,7 @@ def admin_day(day, bookings: list[Booking], day_off: bool = False, header: str =
         lines.append("Записей нет 🌿")
     total = 0
     for b in bookings:
-        mark = "✅" if b.status in (CONFIRMED, "completed") else "⏳"
+        mark = _mark(b)
         opts = f" + {escape(b.options_text)}" if b.options_text else ""
         total += b.price
         lines.append(
@@ -321,8 +338,14 @@ def admin_day(day, bookings: list[Booking], day_off: bool = False, header: str =
         )
     if bookings:
         lines += ["", f"Записей: {len(bookings)} · на сумму {money(total)}"]
-        lines += ["<i>✅ оплачено · ⏳ ждёт оплаты · нажмите на запись, чтобы открыть</i>"]
+        lines += ["<i>✅ предоплата внесена · 💵 оплата в студии · ⏳ ждёт предоплаты\nНажмите на запись, чтобы открыть</i>"]
     return "\n".join(lines)
+
+
+def _mark(b: Booking) -> str:
+    if b.status == PENDING:
+        return "⏳"
+    return "💵" if b.pay_on_site else "✅"
 
 
 def admin_digest(day, bookings: list[Booking]) -> str:
@@ -339,6 +362,8 @@ def admin_view_pick_day() -> str:
 def admin_booking(b: Booking) -> str:
     lines = [f"🧾 <b>Запись #{b.id}</b>", "", _admin_card(b), ""]
     lines.append(f"Статус: {STATUS_TITLES.get(b.status, b.status)}")
+    if b.status in (CONFIRMED, "completed"):
+        lines.append("Оплата: 💵 в студии" if b.pay_on_site else f"Оплата: ✅ предоплата {money(b.prepay)} внесена")
     if b.rating:
         lines.append(f"Оценка: {'⭐' * b.rating}")
     return "\n".join(lines)
@@ -347,7 +372,7 @@ def admin_booking(b: Booking) -> str:
 def admin_cancel_confirm(b: Booking) -> str:
     refund = (
         f"\n\n💸 Клиент уже внёс предоплату {money(b.prepay)} — её нужно будет вернуть."
-        if b.status == CONFIRMED else ""
+        if b.refund_due else ""
     )
     return (
         "Отменить эту запись? Клиент получит сообщение об отмене.\n\n" + _admin_card(b) + refund
@@ -355,14 +380,14 @@ def admin_cancel_confirm(b: Booking) -> str:
 
 
 def admin_cancelled_by_studio(b: Booking) -> str:
-    refund = f"\n\n💸 Не забудьте вернуть предоплату {money(b.prepay)}" if b.status == CONFIRMED else ""
+    refund = f"\n\n💸 Не забудьте вернуть предоплату {money(b.prepay)}" if b.refund_due else ""
     return "❌ <b>Запись отменена администратором</b>\n\n" + _admin_card(b) + refund
 
 
 def client_cancelled_by_studio(b: Booking, settings: Settings) -> str:
     refund = (
         f"\nПредоплату {money(b.prepay)} мы вернём — администратор свяжется с вами."
-        if b.status == CONFIRMED else ""
+        if b.refund_due else ""
     )
     return (
         "😔 <b>К сожалению, нам пришлось отменить вашу запись</b>\n\n"

@@ -73,7 +73,8 @@ CREATE TABLE IF NOT EXISTS bookings (
     reminded_2         INTEGER NOT NULL DEFAULT 0,
     review_requested   INTEGER NOT NULL DEFAULT 0,
     rating             INTEGER,
-    created_at         TEXT NOT NULL
+    created_at         TEXT NOT NULL,
+    payment_method     TEXT NOT NULL DEFAULT 'online'
 );
 CREATE INDEX IF NOT EXISTS idx_bookings_master_start ON bookings(master_id, start);
 CREATE INDEX IF NOT EXISTS idx_bookings_user ON bookings(user_id);
@@ -123,6 +124,7 @@ def _booking(row: aiosqlite.Row) -> Booking:
         expires_at=row["expires_at"],
         invoice_message_id=row["invoice_message_id"],
         rating=row["rating"],
+        payment_method=row["payment_method"] or "online",
         client_name=row["client_name"],
         client_username=row["client_username"],
     )
@@ -143,6 +145,16 @@ class Database:
         await self._conn.execute("PRAGMA journal_mode=WAL")
         await self._conn.execute("PRAGMA foreign_keys=ON")
         await self._conn.executescript(SCHEMA)
+        await self._migrate()
+
+    async def _migrate(self) -> None:
+        """Добавляет новые колонки в базу, созданную старой версией бота."""
+        async with self._conn.execute("PRAGMA table_info(bookings)") as cur:
+            columns = {r["name"] for r in await cur.fetchall()}
+        if "payment_method" not in columns:
+            await self._conn.execute(
+                "ALTER TABLE bookings ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'online'"
+            )
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -297,8 +309,10 @@ class Database:
         prepay: int,
         now: datetime,
         hold_minutes: int,
+        pay_on_site: bool = False,
     ) -> Booking | None:
-        """Создаёт запись в статусе «ждёт оплаты». None — если слот уже заняли."""
+        """Создаёт запись. С предоплатой — в статусе «ждёт оплаты» и с удержанием слота,
+        с оплатой в студии — сразу подтверждённой. None — если слот уже заняли."""
         start_s = to_str(start)
         end_s = to_str(start + timedelta(minutes=duration))
         async with self._lock:
@@ -309,15 +323,21 @@ class Database:
             )
             if await self._slot_taken(master.id, start_s, end_s, now):
                 return None
+            if pay_on_site:
+                status, expires, prepay, method = CONFIRMED, None, 0, "cash"
+            else:
+                status, expires, method = PENDING, to_str(now + timedelta(minutes=hold_minutes)), "online"
             cur = await self.conn.execute(
                 """INSERT INTO bookings(user_id, master_id, master_name, service_id, service_name,
-                       option_ids, options_text, start, end, price, prepay, status, expires_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       option_ids, options_text, start, end, price, prepay, status, expires_at, created_at,
+                       payment_method, reminded_24, reminded_2)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     user_id, master.id, master.name, service.id, service.name,
                     json.dumps([o.id for o in options]), ", ".join(o.name for o in options),
-                    start_s, end_s, price, prepay, PENDING,
-                    to_str(now + timedelta(minutes=hold_minutes)), to_str(now),
+                    start_s, end_s, price, prepay, status, expires, to_str(now), method,
+                    # напоминание не нужно, если до визита уже меньше 24 / 2 часов
+                    int(start - now <= timedelta(hours=24)), int(start - now <= timedelta(hours=2)),
                 ),
             )
             booking_id = cur.lastrowid

@@ -57,8 +57,18 @@ class Booking:
     expires_at: str | None
     invoice_message_id: int | None
     rating: int | None
+    payment_method: str = "online"   # online — предоплата в боте, cash — оплата в студии
     client_name: str = ""
     client_username: str | None = None
+
+    @property
+    def pay_on_site(self) -> bool:
+        return self.payment_method == "cash"
+
+    @property
+    def refund_due(self) -> bool:
+        """Нужно ли вернуть деньги при отмене: только если предоплата уже внесена."""
+        return self.status == CONFIRMED and not self.pay_on_site and self.prepay > 0
 
     @property
     def start_dt(self) -> datetime:

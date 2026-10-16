@@ -229,7 +229,7 @@ async def cancel_booking(
             log.warning("Не удалось уведомить клиента %s об отмене: %s", booking.user_id, e)
             notice += " ⚠️ Клиенту не удалось написать — свяжитесь с ним."
             await cb.answer()
-    if booking.status == CONFIRMED:
+    if booking.refund_due:
         notice += f"\n💸 Не забудьте вернуть предоплату {money(booking.prepay)}."
     await render_home(cb, db, settings, notice=notice)
     await notify_admins_except(bot, settings, cb.from_user.id, texts.admin_cancelled_by_studio(booking))

@@ -29,6 +29,12 @@ def _parse_int(raw: str | None, default: int, lo: int, hi: int) -> int:
         return default
 
 
+def _parse_bool(raw: str | None, default: bool) -> bool:
+    if raw is None or not raw.strip():
+        return default
+    return raw.strip().lower() in ("1", "true", "yes", "on", "да")
+
+
 def _parse_time(raw: str, default: time) -> time:
     try:
         hours, minutes = raw.strip().split(":")
@@ -60,6 +66,8 @@ class Settings:
     hold_minutes: int = 15
     cancel_hours: int = 12
 
+    pay_online: bool = True    # предоплата через Telegram Payments (без токена — демо-кнопка)
+    pay_on_site: bool = True   # оплата в студии мастеру, без предоплаты
     digest_time: time = time(20, 0)
     gallery_dir: Path = field(default=BASE_DIR / "assets" / "gallery")
 
@@ -70,6 +78,15 @@ class Settings:
     @property
     def payments_enabled(self) -> bool:
         return bool(self.payment_token)
+
+    @property
+    def online_available(self) -> bool:
+        # Если оба способа выключены по ошибке, оставляем оплату в студии — запись не должна ломаться
+        return self.pay_online
+
+    @property
+    def on_site_available(self) -> bool:
+        return self.pay_on_site or not self.pay_online
 
 
 def load_settings() -> Settings:
@@ -99,4 +116,6 @@ def load_settings() -> Settings:
         work_end=_parse_time(os.getenv("WORK_END", "20:00"), time(20, 0)),
         booking_days=_parse_int(os.getenv("BOOKING_DAYS"), 30, 1, 60),
         digest_time=_parse_time(os.getenv("DIGEST_TIME", "20:00"), time(20, 0)),
+        pay_online=_parse_bool(os.getenv("PAY_ONLINE"), True),
+        pay_on_site=_parse_bool(os.getenv("PAY_ON_SITE"), True),
     )

@@ -556,3 +556,88 @@ async def test_vacation_period(harness: Harness):
     assert "🔓 Открыто" in h.last_admin()
     assert await h.db.closed_days(start, end, "09:00", "20:00") == set()
     assert not h.errors, h.errors
+
+
+async def test_pay_on_site(harness: Harness):
+    h = harness
+    await h.message("/start")
+    await h.click("m:book")
+    await h.click("b:cat:nails")
+    await h.click("b:srv:1")
+    await h.click("b:opts_done:")
+    await h.click("b:mst:2")
+    await h.click(f"b:day:{tomorrow_code()}")
+    await h.click("b:time:1500")
+    assert "b:confirm:online" in h.buttons() and "b:confirm:cash" in h.buttons()
+    assert "Как удобнее оплатить" in h.last_screen()
+    await h.click("b:confirm:cash")
+
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    assert booking.status == CONFIRMED and booking.pay_on_site and booking.prepay == 0
+    assert "Вы записаны" in h.last_screen() and "Оплата в студии" in h.last_screen()
+    assert "m:book" in h.buttons()  # сразу главное меню, без счёта
+    assert not h.session.of(SendInvoice)
+    admin_msgs = [c.text for c in h.session.of(SendMessage) if c.chat_id == ADMIN]
+    assert any("оплата в студии" in t for t in admin_msgs)
+
+    # бронь без предоплаты не снимается планировщиком, напоминания работают
+    await jobs.expire_unpaid(h.bot, h.db, h.settings)
+    assert (await h.db.get_booking(booking.id)).status == CONFIRMED
+
+    # при отмене не обещаем вернуть деньги
+    await h.click("m:my")
+    await h.click(f"my:view:{booking.id}")
+    await h.click(f"my:cancel:{booking.id}")
+    assert "вернут" not in h.last_screen()
+    await h.click(f"my:cancel_ok:{booking.id}")
+    assert (await h.db.get_booking(booking.id)).status == CANCELLED
+    assert not any("вернуть" in c.text for c in h.session.of(SendMessage) if c.chat_id == ADMIN)
+    assert not h.errors, h.errors
+
+
+async def test_payment_methods_settings(db, tmp_path):
+    from dataclasses import replace
+    base = make_settings(tmp_path)
+    only_cash = replace(base, pay_online=False)
+    only_online = replace(base, pay_on_site=False)
+    for settings, expect in ((only_cash, {"b:confirm:cash"}), (only_online, {"b:confirm:online"})):
+        h = Harness(_dispatcher(db, settings), db, settings)
+        await h.message("/start")
+        await h.click("m:book")
+        await h.click("b:cat:brows")
+        await h.click("b:srv:5")
+        await h.click("b:mst:1")
+        await h.click(f"b:day:{tomorrow_code()}")
+        await h.click("b:time:1000")
+        confirm = {b for b in h.buttons() if b.startswith("b:confirm:")}
+        assert confirm == expect
+        # подмена кнопки на запрещённый способ не проходит
+        forbidden = "b:confirm:online" if settings is only_cash else "b:confirm:cash"
+        await h.click(forbidden)
+        booking = (await db.user_upcoming(CLIENT, now_local(TZ)))[0]
+        assert booking.pay_on_site == (settings is only_cash)
+        await db.cancel_booking(booking.id)
+        assert not h.errors, h.errors
+
+
+async def test_migration_adds_payment_method(tmp_path):
+    import sqlite3
+    from bot.database.db import Database
+    path = tmp_path / "old.db"
+    con = sqlite3.connect(path)
+    con.execute("""CREATE TABLE bookings (id INTEGER PRIMARY KEY, user_id INTEGER, master_id INTEGER,
+        master_name TEXT, service_id INTEGER, service_name TEXT, option_ids TEXT, options_text TEXT,
+        start TEXT, end TEXT, price INTEGER, prepay INTEGER, status TEXT, expires_at TEXT,
+        invoice_message_id INTEGER, charge_id TEXT, reminded_24 INTEGER DEFAULT 0, reminded_2 INTEGER DEFAULT 0,
+        review_requested INTEGER DEFAULT 0, rating INTEGER, created_at TEXT)""")
+    con.execute("""INSERT INTO bookings(user_id, master_id, master_name, service_id, service_name, option_ids,
+        options_text, start, end, price, prepay, status, created_at)
+        VALUES (1, 1, 'Анна', 1, 'Маникюр', '[]', '', '2030-01-01 10:00', '2030-01-01 11:00', 1200, 360,
+        'confirmed', '2029-12-01 10:00')""")
+    con.commit()
+    con.close()
+    database = Database(path)
+    await database.connect()
+    booking = await database.get_booking(1)
+    assert booking.payment_method == "online" and booking.refund_due
+    await database.close()

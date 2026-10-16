@@ -161,11 +161,9 @@ async def render_summary(cb: CallbackQuery, state: FSMContext, db: Database, set
     if sel is None or not data.get("day") or not data.get("time"):
         return await _expired(cb, state, db, settings)
     start = _start_from(data)
-    text = texts.summary(
-        sel.service, sel.options, sel.master.name, start, sel.duration,
-        sel.price, calc_prepay(sel.price, settings.prepay_percent), settings,
-    )
-    await show(cb, db, text, kb.summary())
+    prepay = calc_prepay(sel.price, settings.prepay_percent)
+    text = texts.summary(sel.service, sel.options, sel.master.name, start, sel.duration, sel.price, prepay, settings)
+    await show(cb, db, text, kb.summary(settings, prepay))
 
 
 def _start_from(data: dict) -> datetime:
@@ -315,7 +313,16 @@ async def go_back(
 
 
 @router.callback_query(BookCb.filter(F.action == "confirm"))
-async def confirm(cb: CallbackQuery, state: FSMContext, bot: Bot, db: Database, settings: Settings) -> None:
+async def confirm(
+    cb: CallbackQuery, callback_data: BookCb, state: FSMContext, bot: Bot, db: Database, settings: Settings
+) -> None:
+    # Способ оплаты: выбранный кнопкой, если он сейчас разрешён, иначе доступный
+    if callback_data.value == "cash" and settings.on_site_available:
+        pay_on_site = True
+    elif callback_data.value == "online" and settings.online_available:
+        pay_on_site = False
+    else:
+        pay_on_site = not settings.online_available
     data = await state.get_data()
     sel = await _selection(db, data, need_master=True)
     if sel is None or not data.get("day") or not data.get("time"):
@@ -344,16 +351,23 @@ async def confirm(cb: CallbackQuery, state: FSMContext, bot: Bot, db: Database, 
         prepay=calc_prepay(sel.price, settings.prepay_percent),
         now=now,
         hold_minutes=settings.hold_minutes,
+        pay_on_site=pay_on_site,
     )
     if booking is None:
         await cb.answer()
         return await show(cb, db, texts.SLOT_TAKEN, kb.slot_taken())
 
     log.info(
-        "Новая бронь #%s: %s, %s, мастер %s, клиент %s",
+        "Новая %s #%s: %s, %s, мастер %s, клиент %s",
+        "запись (оплата в студии)" if pay_on_site else "бронь (предоплата)",
         booking.id, booking.start, booking.service_name, booking.master_name, cb.from_user.full_name,
     )
-    await cb.answer("Время закреплено за вами ✨")
     await state.clear()
-    await send_payment(bot, db, settings, booking)
+    if pay_on_site:
+        await cb.answer("Вы записаны ✨")
+        menu = kb.main_menu(is_admin=cb.from_user.id in settings.admin_ids)
+        await show(cb, db, texts.payment_success(booking, settings), menu)
+    else:
+        await cb.answer("Время закреплено за вами ✨")
+        await send_payment(bot, db, settings, booking)
     await notify_admins(bot, settings, texts.admin_new_booking(booking))
