@@ -29,6 +29,17 @@ def _parse_int(raw: str | None, default: int, lo: int, hi: int) -> int:
         return default
 
 
+def _parse_reminders(raw: str | None) -> tuple[int, int]:
+    """«12,6» → (12, 6): первое напоминание раньше второго."""
+    try:
+        first, second = sorted((int(x) for x in str(raw).replace(";", ",").split(",")[:2]), reverse=True)
+        if 0 < second < first <= 72:
+            return first, second
+    except (TypeError, ValueError):
+        pass
+    return 12, 6
+
+
 def _parse_bool(raw: str | None, default: bool) -> bool:
     if raw is None or not raw.strip():
         return default
@@ -66,9 +77,10 @@ class Settings:
     hold_minutes: int = 15
     cancel_hours: int = 12
 
-    pay_online: bool = True    # предоплата через Telegram Payments (без токена — демо-кнопка)
+    pay_online: bool = False   # оплата картой в боте (выключена: запись создаётся сразу)
     pay_on_site: bool = True   # оплата в студии мастеру, без предоплаты
     digest_time: time = time(20, 0)
+    reminder_hours: tuple[int, int] = (12, 6)   # первое и второе напоминание, часов до визита
     gallery_dir: Path = field(default=BASE_DIR / "assets" / "gallery")
 
     @property
@@ -116,7 +128,8 @@ def load_settings() -> Settings:
         work_end=_parse_time(os.getenv("WORK_END", "20:00"), time(20, 0)),
         booking_days=_parse_int(os.getenv("BOOKING_DAYS"), 30, 1, 60),
         digest_time=_parse_time(os.getenv("DIGEST_TIME", "20:00"), time(20, 0)),
-        pay_online=_parse_bool(os.getenv("PAY_ONLINE"), True),
+        pay_online=_parse_bool(os.getenv("PAY_ONLINE"), False),
+        reminder_hours=_parse_reminders(os.getenv("REMINDER_HOURS")),
         prepay_percent=_parse_int(os.getenv("PREPAY_PERCENT"), 30, 1, 100),
         pay_on_site=_parse_bool(os.getenv("PAY_ON_SITE"), True),
     )

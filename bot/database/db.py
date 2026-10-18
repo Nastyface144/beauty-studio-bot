@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
     full_name     TEXT NOT NULL DEFAULT '',
     username      TEXT,
     ui_message_id INTEGER,
+    reminders_on  INTEGER NOT NULL DEFAULT 1,
     created_at    TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 CREATE TABLE IF NOT EXISTS masters (
@@ -135,6 +136,8 @@ class Database:
         self.path = path
         self._conn: aiosqlite.Connection | None = None
         self._lock = asyncio.Lock()
+        # За сколько часов до визита первое и второе напоминание (флаги reminded_24 / reminded_2)
+        self.reminder_hours: tuple[int, int] = (12, 6)
 
     # ---------- lifecycle ----------
 
@@ -155,6 +158,10 @@ class Database:
             await self._conn.execute(
                 "ALTER TABLE bookings ADD COLUMN payment_method TEXT NOT NULL DEFAULT 'online'"
             )
+        async with self._conn.execute("PRAGMA table_info(users)") as cur:
+            user_columns = {r["name"] for r in await cur.fetchall()}
+        if "reminders_on" not in user_columns:
+            await self._conn.execute("ALTER TABLE users ADD COLUMN reminders_on INTEGER NOT NULL DEFAULT 1")
 
     async def close(self) -> None:
         if self._conn is not None:
@@ -337,7 +344,7 @@ class Database:
                     json.dumps([o.id for o in options]), ", ".join(o.name for o in options),
                     start_s, end_s, price, prepay, status, expires, to_str(now), method,
                     # напоминание не нужно, если до визита уже меньше 24 / 2 часов
-                    int(start - now <= timedelta(hours=24)), int(start - now <= timedelta(hours=2)),
+                    int(start - now <= timedelta(hours=self.reminder_hours[0])), int(start - now <= timedelta(hours=self.reminder_hours[1])),
                 ),
             )
             booking_id = cur.lastrowid
@@ -382,8 +389,8 @@ class Database:
                        reminded_24 = ?, reminded_2 = ? WHERE id = ?""",
                 (
                     CONFIRMED, charge_id,
-                    int(start - now <= timedelta(hours=24)),
-                    int(start - now <= timedelta(hours=2)),
+                    int(start - now <= timedelta(hours=self.reminder_hours[0])),
+                    int(start - now <= timedelta(hours=self.reminder_hours[1])),
                     booking_id,
                 ),
             )
@@ -405,8 +412,8 @@ class Database:
                        reminded_24 = ?, reminded_2 = ? WHERE id = ?""",
                 (
                     CONFIRMED,
-                    int(start - now <= timedelta(hours=24)),
-                    int(start - now <= timedelta(hours=2)),
+                    int(start - now <= timedelta(hours=self.reminder_hours[0])),
+                    int(start - now <= timedelta(hours=self.reminder_hours[1])),
                     booking_id,
                 ),
             )
@@ -455,17 +462,35 @@ class Database:
                 )
         return [_booking(r) for r in rows]
 
-    async def due_reminders(self, now: datetime, hours: int) -> list[Booking]:
-        column = "reminded_24" if hours == 24 else "reminded_2"
+    REMINDER_COLUMNS = ("reminded_24", "reminded_2")  # исторические имена: первое и второе напоминание
+
+    async def due_reminders(self, now: datetime, which: int) -> list[Booking]:
+        """Записи, которым пора отправить напоминание `which` (0 — первое, 1 — второе).
+        Клиенты, отключившие напоминания, пропускаются."""
+        column = self.REMINDER_COLUMNS[which]
+        hours = self.reminder_hours[which]
         rows = await self._fetchall(
-            BOOKING_SELECT + f" WHERE b.status = ? AND b.{column} = 0 AND b.start > ? AND b.start <= ?",
+            BOOKING_SELECT
+            + f""" WHERE b.status = ? AND b.{column} = 0 AND b.start > ? AND b.start <= ?
+                   AND COALESCE(u.reminders_on, 1) = 1""",
             (CONFIRMED, to_str(now), to_str(now + timedelta(hours=hours))),
         )
         return [_booking(r) for r in rows]
 
-    async def mark_reminded(self, booking_id: int, hours: int) -> None:
-        column = "reminded_24" if hours == 24 else "reminded_2"
+    async def mark_reminded(self, booking_id: int, which: int) -> None:
+        column = self.REMINDER_COLUMNS[which]
         await self.conn.execute(f"UPDATE bookings SET {column} = 1 WHERE id = ?", (booking_id,))
+
+    async def reminders_on(self, user_id: int) -> bool:
+        row = await self._fetchone("SELECT reminders_on FROM users WHERE user_id = ?", (user_id,))
+        return bool(row["reminders_on"]) if row else True
+
+    async def set_reminders(self, user_id: int, on: bool) -> None:
+        await self.conn.execute(
+            """INSERT INTO users(user_id, reminders_on) VALUES (?, ?)
+               ON CONFLICT(user_id) DO UPDATE SET reminders_on = excluded.reminders_on""",
+            (user_id, int(on)),
+        )
 
     async def finish_visits(self, now: datetime) -> list[Booking]:
         """Переводит прошедшие визиты в «состоялся» и возвращает тех, кого спросить об оценке."""

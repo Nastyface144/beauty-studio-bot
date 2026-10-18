@@ -41,14 +41,18 @@ async def expire_unpaid(bot: Bot, db: Database, settings: Settings) -> None:
 
 async def send_reminders(bot: Bot, db: Database, settings: Settings) -> None:
     now = now_local(settings.timezone)
-    # Сначала 2-часовые: если до визита меньше 2 часов, суточное уже не нужно
-    for hours in (2, 24):
-        for booking in await db.due_reminders(now, hours):
-            await db.mark_reminded(booking.id, hours)
-            if hours == 2:
-                await db.mark_reminded(booking.id, 24)
+    # Сначала второе (ближнее): если до визита уже меньше его срока, первое не нужно
+    for which in (1, 0):
+        for booking in await db.due_reminders(now, which):
+            # Сколько реально осталось до визита (задача идёт раз в 30 секунд, округляем до часа)
+            hours = max(1, round((booking.start_dt - now).total_seconds() / 3600))
+            await db.mark_reminded(booking.id, which)
+            if which == 1:
+                await db.mark_reminded(booking.id, 0)
             try:
-                await bot.send_message(booking.user_id, texts.reminder(booking, settings, hours))
+                await bot.send_message(
+                    booking.user_id, texts.reminder(booking, settings, hours), reply_markup=kb.reminder(True),
+                )
             except TelegramAPIError as e:
                 log.warning("Напоминание #%s не доставлено: %s", booking.id, e)
 

@@ -50,9 +50,14 @@ async def test_payment_confirms_and_sets_reminder_flags(db):
     confirmed, ok = await db.confirm_payment(booking.id, "charge", NOW + timedelta(minutes=5))
     assert ok and confirmed.status == CONFIRMED
     # визит через двое суток — оба напоминания впереди
-    assert await db.due_reminders(datetime(2026, 10, 13, 12, 0), 24)
-    assert not await db.due_reminders(datetime(2026, 10, 13, 12, 0), 2)
-    assert await db.due_reminders(datetime(2026, 10, 14, 10, 30), 2)
+    # визит 14.10 в 12:00; напоминания за 12 и за 6 часов
+    assert not await db.due_reminders(datetime(2026, 10, 13, 23, 0), 0)
+    assert await db.due_reminders(datetime(2026, 10, 14, 0, 30), 0)
+    assert not await db.due_reminders(datetime(2026, 10, 14, 0, 30), 1)
+    assert await db.due_reminders(datetime(2026, 10, 14, 6, 30), 1)
+    # клиент отключил напоминания — ничего не приходит
+    await db.set_reminders(1, False)
+    assert not await db.due_reminders(datetime(2026, 10, 14, 6, 30), 1)
 
 
 async def test_late_payment_conflict(db):

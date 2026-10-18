@@ -18,7 +18,7 @@ from aiogram.types import Message, Update
 
 from bot.config import BASE_DIR, Settings
 from bot.database.models import CANCELLED, CONFIRMED, PENDING
-from bot.keyboards.calendar import day_code
+from bot.keyboards.calendar import day_code, strike
 from bot.main import build_dispatcher
 from bot.scheduler import jobs
 from bot.utils.timeutil import now_local
@@ -142,6 +142,7 @@ def _dispatcher(db, settings):
 
 def make_settings(tmp_path, payment_token=""):
     return Settings(
+        pay_online=True,  # сценарии оплаты картой; запись без оплаты — отдельный тест
         bot_token="42:TEST", admin_ids=frozenset({ADMIN}), payment_token=payment_token,
         timezone=TZ, db_path=tmp_path / "db.sqlite", gallery_dir=BASE_DIR / "assets" / "gallery",
     )
@@ -691,7 +692,7 @@ async def test_days_off_are_grey_and_unclickable(harness: Harness):
     for d in (tomorrow, in_two):
         if d.month != tomorrow.month:
             continue
-        cell = [b for b in markup if b.text == str(d.day) and b.callback_data is None]
+        cell = [b for b in markup if b.text == strike(str(d.day)) and b.callback_data is None]
         assert cell and cell[0].disabled is not None, d
         assert f"b:day:{day_code(d)}" not in [b.callback_data for b in markup]
     assert not h.errors, h.errors
@@ -736,3 +737,79 @@ async def test_switch_pending_card_booking_to_salon(harness: Harness):
     # повторное нажатие ничего не ломает
     await h.click(f"my:to_cash:{booking.id}")
     assert not h.errors, h.errors
+
+
+async def test_default_booking_without_payment(db, tmp_path):
+    from dataclasses import replace
+    settings = replace(make_settings(tmp_path), pay_online=False)  # как на сервере по умолчанию
+    h = Harness(_dispatcher(db, settings), db, settings)
+    await h.message("/start")
+    await h.click("m:book")
+    await h.click("b:cat:brows")
+    await h.click("b:srv:5")
+    await h.click("b:mst:1")
+    await h.click(f"b:day:{tomorrow_code()}")
+    await h.click("b:time:1000")
+    assert [b for b in h.buttons() if b.startswith("b:confirm:")] == ["b:confirm:cash"]
+    assert "оплат" not in h.last_screen().lower()
+    await h.click("b:confirm:cash")
+    booking = (await db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    assert booking.status == CONFIRMED
+    success = h.last_screen()
+    assert "Вы записаны" in success and "оплат" not in success.lower()
+    assert "за 12 и за 6 часов" in success
+    assert not h.session.of(SendInvoice)
+    assert not h.errors, h.errors
+
+
+async def test_reminders_12_and_6_hours_and_opt_out(harness: Harness):
+    h = harness
+    await book_nails(h)
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    await h.click(f"my:demo_pay:{booking.id}")
+    start = now_local(TZ) + timedelta(hours=11, minutes=59)  # пора первое (за 12 ч), второе ещё нет
+    await h.db.conn.execute(
+        "UPDATE bookings SET start = ?, end = ?, reminded_24 = 0, reminded_2 = 0 WHERE id = ?",
+        (start.strftime("%Y-%m-%d %H:%M"), (start + timedelta(hours=2)).strftime("%Y-%m-%d %H:%M"), booking.id),
+    )
+    await jobs.send_reminders(h.bot, h.db, h.settings)
+    sent = [c for c in h.session.of(SendMessage) if "Напоминание" in c.text]
+    assert len(sent) == 1 and "через 12 часов" in sent[0].text
+    assert "m:rem_off" in [b.callback_data for row in sent[0].reply_markup.inline_keyboard for b in row]
+
+    # отключаем кнопкой под напоминанием — второе (за 6 часов) не придёт
+    await h.click("m:rem_off")
+    assert not await h.db.reminders_on(CLIENT)
+    later = (now_local(TZ) + timedelta(hours=5, minutes=59)).strftime("%Y-%m-%d %H:%M")
+    await h.db.conn.execute(
+        "UPDATE bookings SET start = ?, end = ? WHERE id = ?", (later, later[:-5] + "23:59", booking.id),
+    )
+    await jobs.send_reminders(h.bot, h.db, h.settings)
+    assert len([c for c in h.session.of(SendMessage) if "Напоминание" in c.text]) == 1
+
+    # и включаем обратно в «Мои записи»
+    await h.click("m:my")
+    assert "m:rem_toggle" in h.buttons() and "выключены" in h.last_screen()
+    await h.click("m:rem_toggle")
+    assert await h.db.reminders_on(CLIENT) and "включены" in h.last_screen()
+    await jobs.send_reminders(h.bot, h.db, h.settings)
+    second = [c for c in h.session.of(SendMessage) if "Напоминание" in c.text]
+    assert len(second) == 2 and "через 6 часов" in second[-1].text
+    assert not h.errors, h.errors
+
+
+def test_client_buttons_have_no_emoji():
+    import re
+    from bot.config import Settings
+    from bot.keyboards import client as ckb
+    from zoneinfo import ZoneInfo
+    settings = Settings(bot_token="x", admin_ids=frozenset(), payment_token="", timezone=ZoneInfo("Europe/Moscow"),
+                        db_path=BASE_DIR / "x.db")
+    emoji = re.compile("[\U0001F300-\U0001FAFF\u2600-\u27BF\u2B50]")
+    markups = [ckb.main_menu(True), ckb.prices(), ckb.contacts(settings), ckb.categories(), ckb.summary(settings, 1, 1),
+               ckb.slot_taken(), ckb.my_bookings([]), ckb.reminder(True), ckb.reminder(False), ckb.rating(1),
+               ckb.gallery_categories()]
+    for m in markups:
+        for row in m.inline_keyboard:
+            for b in row:
+                assert not emoji.search(b.text), b.text

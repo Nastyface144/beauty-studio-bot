@@ -62,6 +62,7 @@ async def main() -> None:
 
     db = Database(settings.db_path)
     await db.connect()
+    db.reminder_hours = settings.reminder_hours
     await db.seed_demo_data(settings.gallery_dir)
 
     bot = Bot(settings.bot_token, default=DefaultBotProperties(parse_mode=ParseMode.HTML))

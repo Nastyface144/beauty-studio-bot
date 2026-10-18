@@ -85,7 +85,7 @@ def choose_master(masters: list[Master], duration: int, price: int) -> str:
 
 
 def choose_date() -> str:
-    return "Выберите дату:\n<i>✕ — всё занято · бледные числа — выходные дни</i>"
+    return "Выберите дату:\n<i>Зачёркнутые даты недоступны.</i>"
 
 
 def choose_time(duration: int) -> str:
@@ -94,6 +94,8 @@ def choose_time(duration: int) -> str:
 
 def _payment_hint(settings: Settings, price: int, prepay: int) -> list[str]:
     online, on_site = settings.online_available, settings.on_site_available
+    if not online:
+        return []  # оплата в боте выключена: запись просто подтверждается
     full = prepay >= price
     card = (
         f"💳 <b>Картой онлайн</b> — {money(prepay)} сейчас"
@@ -127,7 +129,11 @@ def summary(
         f"Итого: <b>{money(price)}</b>",
         "",
     ]
-    lines += _payment_hint(settings, price, prepay)
+    hint = _payment_hint(settings, price, prepay)
+    if hint:
+        lines += hint
+    else:
+        lines.pop()  # пустая строка после «Итого»
     return "\n".join(lines)
 
 
@@ -149,7 +155,8 @@ def booking_card(b: Booking, settings: Settings, with_status: bool = True) -> st
         f"👤 Мастер: {escape(b.master_name)}",
         f"⏳ {human_duration(b.duration)} · {money(b.price)}",
     ]
-    if with_status and b.status in (PENDING, CONFIRMED):
+    # Строка об оплате нужна, только когда в боте включена оплата картой
+    if with_status and b.status in (PENDING, CONFIRMED) and (settings.online_available or not b.pay_on_site):
         lines.append(_payment_status(b))
     return "\n".join(lines)
 
@@ -170,7 +177,8 @@ def payment_success(b: Booking, settings: Settings) -> str:
         + booking_card(b, settings)
         + f"\n\n📍 {escape(settings.studio_address)}\n"
         f"📞 {escape(settings.studio_phone)}\n\n"
-        "Напомним о визите за сутки и за 2 часа. Запись можно посмотреть или отменить в разделе «Мои записи»."
+        f"Напомним {reminders_note(settings)}. Отменить запись или отключить напоминания "
+        "можно в разделе «Мои записи»."
     )
 
 
@@ -188,10 +196,25 @@ def hold_expired(b: Booking) -> str:
     )
 
 
-def my_bookings(has_any: bool) -> str:
-    if not has_any:
-        return "<b>Мои записи</b>\n\nПредстоящих записей нет."
-    return "<b>Мои записи</b>\n\nВыберите запись:"
+def _hours(n: int) -> str:
+    if n % 10 == 1 and n % 100 != 11:
+        return f"{n} час"
+    if 2 <= n % 10 <= 4 and not 12 <= n % 100 <= 14:
+        return f"{n} часа"
+    return f"{n} часов"
+
+
+def reminders_note(settings: Settings) -> str:
+    first, second = settings.reminder_hours
+    return f"за {first} и за {_hours(second)} до визита"
+
+
+def my_bookings(has_any: bool, reminders_on: bool = True, settings: Settings | None = None) -> str:
+    body = "Выберите запись:" if has_any else "Предстоящих записей нет."
+    if settings is not None:
+        state = f"включены — {reminders_note(settings)}" if reminders_on else "выключены"
+        body += f"\n\n<i>Напоминания {state}.</i>"
+    return f"<b>Мои записи</b>\n\n{body}"
 
 
 def cancel_confirm(b: Booking, settings: Settings) -> str:
@@ -256,9 +279,8 @@ def gallery_empty(category: str) -> str:
 
 
 def reminder(b: Booking, settings: Settings, hours: int) -> str:
-    when = "завтра" if hours == 24 else "через 2 часа"
     return (
-        f"🔔 <b>Напоминание: {when} у вас запись</b>\n\n"
+        f"🔔 <b>Напоминание: через {_hours(hours)} у вас запись</b>\n\n"
         + booking_card(b, settings)
         + f"\n\n📍 {escape(settings.studio_address)}\n"
         f"📞 {escape(settings.studio_phone)}"

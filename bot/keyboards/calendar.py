@@ -44,6 +44,11 @@ def pick_month(days: list[date], wanted: tuple[int, int] | None) -> tuple[int, i
     return wanted if wanted in months else months[0]
 
 
+def strike(text: str) -> str:
+    """Зачёркнутый текст (комбинирующий символ U+0336) — для недоступных дней."""
+    return "".join(ch + "\u0336" for ch in text)
+
+
 def _noop(text: str) -> InlineKeyboardButton:
     """Неактивная кнопка: нажать нельзя, Telegram показывает её приглушённой."""
     return InlineKeyboardButton(text=text, disabled=DisabledButton())
@@ -56,13 +61,14 @@ def calendar_rows(
     month: tuple[int, int] | None = None,
     nav: Callable[[tuple[int, int]], str] | None = None,
     inactive: Callable[[date], bool] | None = None,
+    selected: date | None = None,
 ) -> list[list[InlineKeyboardButton]]:
-    """Календарь на один месяц: ◀️ Месяц ▶️, дни недели и сетка по неделям.
+    """Календарь на один месяц: ‹ Месяц ›, дни недели и сетка по неделям.
 
     Показываются только дни диапазона `days`, попавшие в `month`. Стрелки листают
     к соседним месяцам диапазона (callback из `nav`). `label(d)` возвращает текст
-    кнопки для доступного дня или None для занятого (✕). `inactive(d)` — нерабочий день:
-    число показывается неактивной (серой) кнопкой.
+    кнопки для доступного дня или None для занятого. Занятые и нерабочие (`inactive`) дни
+    показываются зачёркнутым числом на неактивной кнопке; `selected` подсвечивается зелёным.
     """
     months = months_of(days)
     month = pick_month(days, month)
@@ -70,16 +76,16 @@ def calendar_rows(
         return []
     idx = months.index(month)
     prev_btn = (
-        InlineKeyboardButton(text="◀️", callback_data=nav(months[idx - 1]))
+        InlineKeyboardButton(text="‹", callback_data=nav(months[idx - 1]))
         if nav and idx > 0 else _noop(" ")
     )
     next_btn = (
-        InlineKeyboardButton(text="▶️", callback_data=nav(months[idx + 1]))
+        InlineKeyboardButton(text="›", callback_data=nav(months[idx + 1]))
         if nav and idx < len(months) - 1 else _noop(" ")
     )
     rows = [
         [prev_btn, _noop(f"{MONTHS_NOM[month[1] - 1]} {month[0]}"), next_btn],
-        [_noop(w) for w in WEEKDAYS_SHORT],
+        [_noop(w.lower()) for w in WEEKDAYS_SHORT],
     ]
 
     in_range = {d for d in days if (d.year, d.month) == month}
@@ -91,13 +97,16 @@ def calendar_rows(
             if cursor not in in_range:
                 row.append(_noop(" "))
             elif inactive is not None and inactive(cursor):
-                row.append(_noop(str(cursor.day)))
+                row.append(_noop(strike(str(cursor.day))))
             else:
                 text = label(cursor)
                 if text is None:
-                    row.append(_noop("✕"))
+                    row.append(_noop(strike(str(cursor.day))))
                 else:
-                    row.append(InlineKeyboardButton(text=text, callback_data=callback(cursor)))
+                    row.append(InlineKeyboardButton(
+                        text=text, callback_data=callback(cursor),
+                        style="success" if cursor == selected else None,
+                    ))
             cursor += timedelta(days=1)
         rows.append(row)
     return rows

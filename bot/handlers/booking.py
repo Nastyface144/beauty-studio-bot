@@ -192,7 +192,9 @@ async def render_calendar(
         text = f"{note}\n\n{text}"
     if not available:
         text += "\n\n" + texts.no_slots(settings.booking_days, sel.any_master)
-    await show(cb, db, text, kb.booking_calendar(days, available, _calendar_month(data, available), day_off))
+    selected = parse_day_code(data["day"]) if data.get("day") else None
+    markup = kb.booking_calendar(days, available, _calendar_month(data, available), day_off, selected)
+    await show(cb, db, text, markup)
 
 
 def _calendar_month(data: dict, available: set[date]) -> tuple[int, int] | None:

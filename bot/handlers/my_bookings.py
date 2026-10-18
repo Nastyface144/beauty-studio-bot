@@ -5,6 +5,7 @@ import logging
 from datetime import timedelta
 
 from aiogram import Bot, F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
 from bot import texts
@@ -42,9 +43,38 @@ async def _own_upcoming(db: Database, settings: Settings, user_id: int, booking_
     return booking
 
 
-async def render_list(cb: CallbackQuery, db: Database, settings: Settings) -> None:
+async def render_list(cb: CallbackQuery, db: Database, settings: Settings, notice: str = "") -> None:
     items = await db.user_upcoming(cb.from_user.id, now_local(settings.timezone))
-    await show(cb, db, texts.my_bookings(bool(items)), kb.my_bookings(items))
+    on = await db.reminders_on(cb.from_user.id)
+    text = texts.my_bookings(bool(items), on, settings)
+    if notice:
+        text = f"{notice}\n\n{text}"
+    await show(cb, db, text, kb.my_bookings(items, on))
+
+
+@router.callback_query(MenuCb.filter(F.action == "rem_toggle"))
+async def toggle_reminders(cb: CallbackQuery, db: Database, settings: Settings) -> None:
+    on = not await db.reminders_on(cb.from_user.id)
+    await db.set_reminders(cb.from_user.id, on)
+    log.info("Клиент %s %s напоминания", cb.from_user.id, "включил" if on else "отключил")
+    await cb.answer("Напоминания включены" if on else "Напоминания отключены")
+    await render_list(cb, db, settings)
+
+
+@router.callback_query(MenuCb.filter(F.action.in_({"rem_off", "rem_on"})))
+async def reminders_from_message(cb: CallbackQuery, callback_data: MenuCb, db: Database) -> None:
+    """Кнопка под самим напоминанием: меняем только её, сообщение остаётся."""
+    on = callback_data.action == "rem_on"
+    await db.set_reminders(cb.from_user.id, on)
+    log.info("Клиент %s %s напоминания", cb.from_user.id, "включил" if on else "отключил")
+    await cb.answer(
+        "Напоминания снова включены" if on else "Напоминания отключены. Включить можно в «Мои записи».",
+        show_alert=not on,
+    )
+    try:
+        await cb.message.edit_reply_markup(reply_markup=kb.reminder(on))
+    except TelegramBadRequest:
+        pass
 
 
 @router.callback_query(MenuCb.filter(F.action == "my"))
