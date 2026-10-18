@@ -52,16 +52,16 @@ async def send_payment(bot: Bot, db: Database, settings: Settings, booking: Book
             provider_token=settings.payment_token,
             currency="RUB",
             prices=[LabeledPrice(label=f"Предоплата {settings.prepay_percent}%", amount=booking.prepay * 100)],
-            reply_markup=kb.invoice(booking),
+            reply_markup=kb.invoice(booking, settings.on_site_available),
         )
     else:
         msg = await bot.send_message(
             chat_id,
-            "💳 <b>Предоплата</b>\n\n"
+            "💳 <b>Оплата картой</b>\n\n"
             + texts.booking_card(booking, settings)
             + f"\n\nК оплате: <b>{money(booking.prepay)}</b>\n\n"
-            "<i>Платёжный токен не настроен, поэтому оплата работает в демо-режиме.</i>",
-            reply_markup=kb.demo_payment(booking),
+            "<i>Демо-режим: платёжная система не подключена, деньги не списываются.</i>",
+            reply_markup=kb.demo_payment(booking, settings.on_site_available),
         )
 
     await db.set_invoice_message(booking.id, msg.message_id)

@@ -274,7 +274,7 @@ async def test_scheduler_jobs(harness: Harness):
         "UPDATE bookings SET start = '2000-01-01 10:00', end = '2000-01-01 11:00' WHERE id = ?", (booking.id,)
     )
     await jobs.request_reviews(h.bot, h.db, h.settings)
-    assert any("оценку" in c.text for c in h.session.of(SendMessage))
+    assert any("Оцените" in c.text for c in h.session.of(SendMessage))
     await h.click(f"r:{booking.id}:5")
     assert (await h.db.get_booking(booking.id)).rating == 5
     assert not h.errors, h.errors
@@ -569,16 +569,16 @@ async def test_pay_on_site(harness: Harness):
     await h.click(f"b:day:{tomorrow_code()}")
     await h.click("b:time:1500")
     assert "b:confirm:online" in h.buttons() and "b:confirm:cash" in h.buttons()
-    assert "Как удобнее оплатить" in h.last_screen()
+    assert "Способ оплаты" in h.last_screen()
     await h.click("b:confirm:cash")
 
     booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
     assert booking.status == CONFIRMED and booking.pay_on_site and booking.prepay == 0
-    assert "Вы записаны" in h.last_screen() and "Оплата в студии" in h.last_screen()
+    assert "Вы записаны" in h.last_screen() and "Оплата в салоне" in h.last_screen()
     assert "m:book" in h.buttons()  # сразу главное меню, без счёта
     assert not h.session.of(SendInvoice)
     admin_msgs = [c.text for c in h.session.of(SendMessage) if c.chat_id == ADMIN]
-    assert any("оплата в студии" in t for t in admin_msgs)
+    assert any("оплата в салоне" in t for t in admin_msgs)
 
     # бронь без предоплаты не снимается планировщиком, напоминания работают
     await jobs.expire_unpaid(h.bot, h.db, h.settings)
@@ -694,4 +694,45 @@ async def test_days_off_are_grey_and_unclickable(harness: Harness):
         cell = [b for b in markup if b.text == str(d.day) and b.callback_data is None]
         assert cell and cell[0].disabled is not None, d
         assert f"b:day:{day_code(d)}" not in [b.callback_data for b in markup]
+    assert not h.errors, h.errors
+
+
+async def test_any_master_and_step_header(harness: Harness):
+    h = harness
+    await book_nails(h)  # Анна занята завтра 12:00–14:15
+    u = 2002
+    await h.click("m:book", uid=u)
+    await h.click("b:cat:nails", uid=u)
+    await h.click("b:srv:1", uid=u)
+    await h.click("b:opts_done:", uid=u)
+    screen = [c for c in h.session.calls if getattr(c, "chat_id", None) == u and hasattr(c, "text")][-1]
+    assert "шаг 4 из 6" in screen.text
+    buttons = [b.callback_data for row in screen.reply_markup.inline_keyboard for b in row]
+    assert buttons[0] == "b:mst:0"  # «Любой свободный» первым
+    await h.click("b:mst:0", uid=u)
+    await h.click(f"b:day:{tomorrow_code()}", uid=u)
+    screen = [c for c in h.session.calls if getattr(c, "chat_id", None) == u and hasattr(c, "text")][-1]
+    assert "любой свободный мастер" in screen.text
+    times = [b.callback_data for row in screen.reply_markup.inline_keyboard for b in row if b.callback_data]
+    assert "b:time:1200" in times  # у Анны занято, но Виктория свободна
+    await h.click("b:time:1200", uid=u)
+    await h.click("b:confirm:cash", uid=u)
+    booking = (await h.db.user_upcoming(u, now_local(TZ)))[0]
+    assert booking.master_name == "Виктория" and booking.pay_on_site
+    assert not h.errors, h.errors
+
+
+async def test_switch_pending_card_booking_to_salon(harness: Harness):
+    h = harness
+    await book_nails(h)  # бронь ждёт оплаты картой
+    booking = (await h.db.user_upcoming(CLIENT, now_local(TZ)))[0]
+    assert booking.status == PENDING
+    assert f"my:to_cash:{booking.id}" in h.buttons()
+    await h.click(f"my:to_cash:{booking.id}")
+    booking = await h.db.get_booking(booking.id)
+    assert booking.status == CONFIRMED and booking.pay_on_site and booking.prepay == 0
+    assert "Вы записаны" in h.last_screen()
+    assert any("оплату в салоне" in c.text for c in h.session.of(SendMessage) if c.chat_id == ADMIN)
+    # повторное нажатие ничего не ломает
+    await h.click(f"my:to_cash:{booking.id}")
     assert not h.errors, h.errors

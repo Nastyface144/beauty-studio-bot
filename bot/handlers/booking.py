@@ -1,4 +1,4 @@
-"""Пошаговая запись: категория → услуга → опции → мастер → дата → время → итог."""
+"""Пошаговая запись: направление → услуга → опции → мастер → дата → время → подтверждение и оплата."""
 from __future__ import annotations
 
 import logging
@@ -19,20 +19,24 @@ from bot.keyboards.calendar import day_code, parse_day_code, parse_month_code
 from bot.keyboards.callbacks import BookCb, MenuCb
 from bot.payments.service import calc_prepay, send_payment
 from bot.services.slots import day_grid, free_starts
-from bot.utils.notify import notify_admins
 from bot.utils.menu import main_menu_screen
+from bot.utils.notify import notify_admins
 from bot.utils.timeutil import now_local
 from bot.utils.ui import safe_delete, show
 
 log = logging.getLogger(__name__)
 router = Router(name="booking")
 
+ANY_MASTER = 0  # master_id в FSM: клиент выбрал «любой свободный мастер»
+
 
 @dataclass
 class Selection:
     service: Service
     options: list[Option]
-    master: Master | None
+    masters: list[Master]       # кого рассматриваем: одного выбранного или всех подходящих
+    any_master: bool
+    assigned: Master | None     # конкретный мастер (после выбора времени)
 
     @property
     def duration(self) -> int:
@@ -42,6 +46,12 @@ class Selection:
     def price(self) -> int:
         return self.service.price + sum(o.price for o in self.options)
 
+    @property
+    def master_title(self) -> str:
+        if self.assigned:
+            return self.assigned.name
+        return texts.ANY_MASTER_TITLE if self.any_master else (self.masters[0].name if self.masters else "")
+
 
 async def _selection(db: Database, data: dict, need_master: bool = False) -> Selection | None:
     """Восстанавливает выбор клиента из FSM. None — если данных не хватает (бот перезапускался и т.п.)."""
@@ -49,10 +59,21 @@ async def _selection(db: Database, data: dict, need_master: bool = False) -> Sel
     if service is None:
         return None
     options = await db.get_options(data.get("option_ids", []))
-    master = await db.get_master(data["master_id"]) if data.get("master_id") else None
-    if need_master and (master is None or service.category not in master.categories):
+    master_id = data.get("master_id")
+    masters: list[Master] = []
+    any_master = master_id == ANY_MASTER
+    if any_master:
+        masters = await db.masters_for_category(service.category)
+    elif master_id:
+        master = await db.get_master(master_id)
+        if master is not None and service.category in master.categories:
+            masters = [master]
+    if need_master and not masters:
         return None
-    return Selection(service, options, master)
+    assigned = None
+    if data.get("assigned_master"):
+        assigned = next((m for m in masters if m.id == data["assigned_master"]), None)
+    return Selection(service, options, masters, any_master, assigned)
 
 
 async def _expired(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
@@ -65,19 +86,27 @@ def _booking_days(settings: Settings) -> list[date]:
     return [today + timedelta(days=i) for i in range(settings.booking_days)]
 
 
-async def _free_by_day(
-    db: Database, settings: Settings, master_id: int, duration: int, days: list[date]
-) -> dict[date, list[datetime]]:
+async def _free_by_master(
+    db: Database, settings: Settings, masters: list[Master], duration: int, days: list[date]
+) -> dict[int, dict[date, list[datetime]]]:
+    """Свободные начала по каждому мастеру и дню."""
     now = now_local(settings.timezone)
-    busy = await db.busy_intervals(master_id, days[0], days[-1], now)
     weekly_off = await db.get_weekly_off()
-    return {
-        d: [] if d.weekday() in weekly_off else free_starts(
-            d, duration, busy, now, settings.work_start, settings.work_end,
-            settings.slot_step_min, settings.min_lead_min,
-        )
-        for d in days
-    }
+    result = {}
+    for m in masters:
+        busy = await db.busy_intervals(m.id, days[0], days[-1], now)
+        result[m.id] = {
+            d: [] if d.weekday() in weekly_off else free_starts(
+                d, duration, busy, now, settings.work_start, settings.work_end,
+                settings.slot_step_min, settings.min_lead_min,
+            )
+            for d in days
+        }
+    return result
+
+
+def _union(free: dict[int, dict[date, list[datetime]]], day: date) -> set[datetime]:
+    return {s for by_day in free.values() for s in by_day.get(day, [])}
 
 
 async def _days_off(db: Database, settings: Settings, days: list[date]) -> set[date]:
@@ -87,10 +116,33 @@ async def _days_off(db: Database, settings: Settings, days: list[date]) -> set[d
     return {d for d in days if d.weekday() in weekly_off or d in closed}
 
 
+async def _has_options(db: Database, category: str) -> bool:
+    return bool(await db.options(category))
+
+
+async def _header(db: Database, data: dict, name: str, sel: Selection | None = None) -> str:
+    """Шапка шага: «Шаг N из M» и то, что клиент уже выбрал."""
+    category = data.get("category")
+    with_options = await _has_options(db, category) if category in CATEGORIES else True
+    order = ["category", "service"] + (["options"] if with_options else []) + ["master", "date", "time"]
+    recap: list[tuple[str, str]] = []
+    if sel is not None:
+        service = sel.service.name
+        if sel.options and name != "options":
+            service += " + " + ", ".join(o.name for o in sel.options)
+        recap.append(("Услуга", service))
+        if name in ("date", "time"):
+            recap.append(("Мастер", sel.master_title))
+        if name == "time" and data.get("day"):
+            recap.append(("Дата", texts.short_date(parse_day_code(data["day"]))))
+    return texts.step_header(order.index(name) + 1, len(order), recap)
+
+
 # ---------- экраны шагов ----------
 
-async def render_categories(cb: CallbackQuery, db: Database) -> None:
-    await show(cb, db, texts.choose_category(), kb.categories())
+async def render_categories(cb: CallbackQuery, state: FSMContext, db: Database) -> None:
+    head = await _header(db, await state.get_data(), "category")
+    await show(cb, db, head + texts.choose_category(), kb.categories())
 
 
 async def render_services(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
@@ -98,25 +150,30 @@ async def render_services(cb: CallbackQuery, state: FSMContext, db: Database, se
     category = data.get("category")
     if category not in CATEGORIES:
         return await _expired(cb, state, db, settings)
-    await show(cb, db, texts.choose_service(category), kb.services(await db.services(category)))
+    head = await _header(db, data, "service")
+    await show(cb, db, head + texts.choose_service(category), kb.services(await db.services(category)))
 
 
 async def render_options(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
-    sel = await _selection(db, await state.get_data())
+    data = await state.get_data()
+    sel = await _selection(db, data)
     if sel is None:
         return await _expired(cb, state, db, settings)
     items = await db.options(sel.service.category)
     selected = {o.id for o in sel.options}
-    await show(cb, db, texts.choose_options(sel.service, sel.options), kb.options(items, selected))
+    head = await _header(db, data, "options", sel)
+    await show(cb, db, head + texts.choose_options(sel.options, sel.price), kb.options(items, selected))
 
 
 async def render_masters(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
-    sel = await _selection(db, await state.get_data())
+    data = await state.get_data()
+    sel = await _selection(db, data)
     if sel is None:
         return await _expired(cb, state, db, settings)
-    has_options = bool(await db.options(sel.service.category))
     masters = await db.masters_for_category(sel.service.category)
-    await show(cb, db, texts.choose_master(), kb.masters(masters, "options" if has_options else "services"))
+    back_to = "options" if await _has_options(db, sel.service.category) else "services"
+    head = await _header(db, data, "master", sel)
+    await show(cb, db, head + texts.choose_master(masters, sel.duration, sel.price), kb.masters(masters, back_to))
 
 
 async def render_calendar(
@@ -127,14 +184,14 @@ async def render_calendar(
     if sel is None:
         return await _expired(cb, state, db, settings)
     days = _booking_days(settings)
-    free = await _free_by_day(db, settings, sel.master.id, sel.duration, days)
-    available = {d for d, starts in free.items() if starts}
+    free = await _free_by_master(db, settings, sel.masters, sel.duration, days)
+    available = {d for d in days if _union(free, d)}
     day_off = await _days_off(db, settings, days)
-    text = texts.choose_date(sel.master.name, sel.duration)
+    text = await _header(db, data, "date", sel) + texts.choose_date()
     if note:
         text = f"{note}\n\n{text}"
     if not available:
-        text += "\n\n" + texts.no_slots(settings.booking_days)
+        text += "\n\n" + texts.no_slots(settings.booking_days, sel.any_master)
     await show(cb, db, text, kb.booking_calendar(days, available, _calendar_month(data, available), day_off))
 
 
@@ -157,32 +214,49 @@ async def render_times(cb: CallbackQuery, state: FSMContext, db: Database, setti
     if sel is None or not data.get("day"):
         return await _expired(cb, state, db, settings)
     day = parse_day_code(data["day"])
-    starts = (await _free_by_day(db, settings, sel.master.id, sel.duration, [day]))[day]
-    if not starts:
-        return await render_calendar(cb, state, db, settings, note="😔 На этот день свободного времени уже нет.")
+    free = _union(await _free_by_master(db, settings, sel.masters, sel.duration, [day]), day)
+    if not free:
+        return await render_calendar(cb, state, db, settings, note=texts.DAY_FULL)
     now = now_local(settings.timezone)
-    busy = await db.busy_intervals(sel.master.id, day, day, now)
-    grid = day_grid(
-        day, sel.duration, busy, now, settings.work_start, settings.work_end,
+    # Сетка возможных начал одинакова для всех мастеров; свободно — если свободен хотя бы один
+    candidates = day_grid(
+        day, sel.duration, [], now, settings.work_start, settings.work_end,
         settings.slot_step_min, settings.min_lead_min,
     )
-    await show(cb, db, texts.choose_time(day, sel.duration), kb.times(grid))
+    grid = [(start, start in free) for start, _ in candidates]
+    text = await _header(db, data, "time", sel) + texts.choose_time(sel.duration)
+    await show(cb, db, text, kb.times(grid))
 
 
 async def render_summary(cb: CallbackQuery, state: FSMContext, db: Database, settings: Settings) -> None:
     data = await state.get_data()
     sel = await _selection(db, data, need_master=True)
-    if sel is None or not data.get("day") or not data.get("time"):
+    if sel is None or sel.assigned is None or not data.get("day") or not data.get("time"):
         return await _expired(cb, state, db, settings)
     start = _start_from(data)
     prepay = calc_prepay(sel.price, settings.prepay_percent)
-    text = texts.summary(sel.service, sel.options, sel.master.name, start, sel.duration, sel.price, prepay, settings)
-    await show(cb, db, text, kb.summary(settings, prepay))
+    text = texts.summary(sel.service, sel.options, sel.assigned.name, start, sel.duration, sel.price, prepay, settings)
+    await show(cb, db, text, kb.summary(settings, sel.price, prepay))
 
 
 def _start_from(data: dict) -> datetime:
     raw = data["time"]
     return datetime.combine(parse_day_code(data["day"]), time(int(raw[:2]), int(raw[2:])))
+
+
+async def _pick_master_for(db: Database, settings: Settings, sel: Selection, start: datetime) -> Master | None:
+    """Мастер, свободный в это время. При «любом мастере» — наименее загруженный в этот день."""
+    day = start.date()
+    free = await _free_by_master(db, settings, sel.masters, sel.duration, [day])
+    candidates = [m for m in sel.masters if start in free[m.id][day]]
+    if len(candidates) <= 1:
+        return candidates[0] if candidates else None
+    now = now_local(settings.timezone)
+    loads = {}
+    for m in candidates:
+        busy = await db.busy_intervals(m.id, day, day, now)
+        loads[m.id] = sum((e - s).total_seconds() for s, e in busy)
+    return min(candidates, key=lambda m: loads[m.id])
 
 
 # ---------- обработчики ----------
@@ -192,7 +266,7 @@ async def start_booking(cb: CallbackQuery, state: FSMContext, db: Database) -> N
     await cb.answer()
     await state.clear()
     await db.upsert_user(cb.from_user.id, cb.from_user.full_name, cb.from_user.username)
-    await render_categories(cb, db)
+    await render_categories(cb, state, db)
 
 
 @router.callback_query(BookCb.filter(F.action == "cat"))
@@ -201,7 +275,7 @@ async def pick_category(
 ) -> None:
     await cb.answer()
     if callback_data.value not in CATEGORIES:
-        return await render_categories(cb, db)
+        return await render_categories(cb, state, db)
     await state.set_data({"category": callback_data.value})
     await render_services(cb, state, db, settings)
 
@@ -214,8 +288,10 @@ async def pick_service(
     service = await db.get_service(int(callback_data.value)) if callback_data.value.isdigit() else None
     if service is None:
         return await _expired(cb, state, db, settings)
-    await state.update_data(category=service.category, service_id=service.id, option_ids=[], master_id=None)
-    if await db.options(service.category):
+    await state.update_data(
+        category=service.category, service_id=service.id, option_ids=[], master_id=None, assigned_master=None,
+    )
+    if await _has_options(db, service.category):
         await render_options(cb, state, db, settings)
     else:
         await render_masters(cb, state, db, settings)
@@ -252,7 +328,9 @@ async def pick_master(
     await cb.answer()
     if not callback_data.value.isdigit():
         return await _expired(cb, state, db, settings)
-    await state.update_data(master_id=int(callback_data.value), day=None, time=None, month=None)
+    await state.update_data(
+        master_id=int(callback_data.value), assigned_master=None, day=None, time=None, month=None,
+    )
     await render_calendar(cb, state, db, settings)
 
 
@@ -270,15 +348,13 @@ async def switch_month(
 async def pick_day(
     cb: CallbackQuery, callback_data: BookCb, state: FSMContext, db: Database, settings: Settings
 ) -> None:
+    await cb.answer()
     try:
         day = parse_day_code(callback_data.value)
     except ValueError:
-        await cb.answer()
         return await _expired(cb, state, db, settings)
-
-    await cb.answer()
     if day not in _booking_days(settings):
-        return await render_calendar(cb, state, db, settings, note="Эта дата уже недоступна.")
+        return await render_calendar(cb, state, db, settings, note=texts.DATE_UNAVAILABLE)
     await state.update_data(day=day_code(day), month=None)
     await render_times(cb, state, db, settings)
 
@@ -294,13 +370,13 @@ async def pick_time(
         await cb.answer()
         return await _expired(cb, state, db, settings)
     day = parse_day_code(data["day"])
-    starts = (await _free_by_day(db, settings, sel.master.id, sel.duration, [day]))[day]
     chosen = datetime.combine(day, time(int(raw[:2]) % 24, int(raw[2:]) % 60))
-    if chosen not in starts:
+    master = await _pick_master_for(db, settings, sel, chosen)
+    if master is None:
         await cb.answer(texts.SLOT_TAKEN, show_alert=True)
         return await render_times(cb, state, db, settings)
     await cb.answer()
-    await state.update_data(time=raw)
+    await state.update_data(time=raw, assigned_master=master.id)
     await render_summary(cb, state, db, settings)
 
 
@@ -310,9 +386,9 @@ async def go_back(
 ) -> None:
     await cb.answer()
     target = callback_data.value
-    if target == "cats":
-        await render_categories(cb, db)
-    elif target == "services":
+    if target in ("calendar", "times"):
+        await state.update_data(assigned_master=None)
+    if target == "services":
         await render_services(cb, state, db, settings)
     elif target == "options":
         await render_options(cb, state, db, settings)
@@ -323,7 +399,17 @@ async def go_back(
     elif target == "times":
         await render_times(cb, state, db, settings)
     else:
-        await render_categories(cb, db)
+        await render_categories(cb, state, db)
+
+
+async def _create(db: Database, settings: Settings, cb: CallbackQuery, sel: Selection, master: Master,
+                  start: datetime, now: datetime, pay_on_site: bool):
+    return await db.create_booking(
+        user_id=cb.from_user.id, master=master, service=sel.service, options=sel.options,
+        start=start, duration=sel.duration, price=sel.price,
+        prepay=calc_prepay(sel.price, settings.prepay_percent),
+        now=now, hold_minutes=settings.hold_minutes, pay_on_site=pay_on_site,
+    )
 
 
 @router.callback_query(BookCb.filter(F.action == "confirm"))
@@ -339,7 +425,7 @@ async def confirm(
         pay_on_site = not settings.online_available
     data = await state.get_data()
     sel = await _selection(db, data, need_master=True)
-    if sel is None or not data.get("day") or not data.get("time"):
+    if sel is None or sel.assigned is None or not data.get("day") or not data.get("time"):
         await cb.answer()
         return await _expired(cb, state, db, settings)
 
@@ -354,34 +440,27 @@ async def confirm(
         if old.status == PENDING:
             await safe_delete(bot, old.user_id, old.invoice_message_id)
 
-    booking = await db.create_booking(
-        user_id=cb.from_user.id,
-        master=sel.master,
-        service=sel.service,
-        options=sel.options,
-        start=start,
-        duration=sel.duration,
-        price=sel.price,
-        prepay=calc_prepay(sel.price, settings.prepay_percent),
-        now=now,
-        hold_minutes=settings.hold_minutes,
-        pay_on_site=pay_on_site,
-    )
+    booking = await _create(db, settings, cb, sel, sel.assigned, start, now, pay_on_site)
+    if booking is None and sel.any_master:
+        # Мастера только что заняли — подбираем другого, свободного в это же время
+        other = await _pick_master_for(db, settings, sel, start)
+        if other is not None:
+            booking = await _create(db, settings, cb, sel, other, start, now, pay_on_site)
     if booking is None:
         await cb.answer()
         return await show(cb, db, texts.SLOT_TAKEN, kb.slot_taken())
 
     log.info(
         "Новая %s #%s: %s, %s, мастер %s, клиент %s",
-        "запись (оплата в студии)" if pay_on_site else "бронь (предоплата)",
+        "запись (оплата в салоне)" if pay_on_site else "бронь (оплата картой)",
         booking.id, booking.start, booking.service_name, booking.master_name, cb.from_user.full_name,
     )
     await state.clear()
     if pay_on_site:
-        await cb.answer("Вы записаны ✨")
+        await cb.answer("Запись подтверждена")
         menu = kb.main_menu(is_admin=cb.from_user.id in settings.admin_ids)
         await show(cb, db, texts.payment_success(booking, settings), menu)
     else:
-        await cb.answer("Время закреплено за вами ✨")
+        await cb.answer("Время забронировано")
         await send_payment(bot, db, settings, booking)
     await notify_admins(bot, settings, texts.admin_new_booking(booking))

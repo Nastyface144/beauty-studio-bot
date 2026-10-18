@@ -64,7 +64,7 @@ async def view(cb: CallbackQuery, callback_data: MyCb, db: Database, settings: S
     text = "📋 <b>Ваша запись</b>\n\n" + texts.booking_card(booking, settings)
     if not can_cancel:
         text += texts.cancel_too_late(settings)
-    await show(cb, db, text, kb.my_booking(booking, can_cancel))
+    await show(cb, db, text, kb.my_booking(booking, can_cancel, settings.on_site_available))
 
 
 @router.callback_query(MyCb.filter(F.action == "cancel"))

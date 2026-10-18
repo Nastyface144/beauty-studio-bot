@@ -4,74 +4,108 @@ from __future__ import annotations
 from html import escape
 
 from bot.config import Settings
-from bot.database.models import CONFIRMED, PENDING, Booking, Option, Service
+from bot.database.models import CONFIRMED, PENDING, Booking, Master, Option, Service
 from bot.demo_data import category_title
-from bot.utils.timeutil import MONTHS_NOM, WEEKDAYS_FULL, human_date, human_dt, human_duration, money
+from bot.utils.timeutil import (
+    MONTHS_GEN, MONTHS_NOM, WEEKDAYS_FULL, WEEKDAYS_SHORT, human_date, human_dt, human_duration, money,
+)
 
+ANY_MASTER_TITLE = "любой свободный мастер"
+
+
+def short_date(d) -> str:
+    """17 октября, сб"""
+    return f"{d.day} {MONTHS_GEN[d.month - 1]}, {WEEKDAYS_SHORT[d.weekday()].lower()}"
+
+
+# ---------- главное меню ----------
 
 def welcome(settings: Settings, name: str) -> str:
     return (
-        f"🌸 <b>{escape(settings.studio_name)}</b>\n\n"
-        f"Здравствуйте, {escape(name)}! Рады видеть вас 💗\n\n"
-        "Здесь можно за минуту записаться на маникюр, педикюр, брови или ресницы, "
-        "посмотреть цены и наши работы.\n\n"
-        "Чем могу помочь?"
+        f"<b>{escape(settings.studio_name)}</b>\n"
+        "Маникюр · педикюр · брови · ресницы\n\n"
+        f"Здравствуйте, {escape(name)}!\n"
+        "Здесь можно записаться к мастеру, посмотреть цены и примеры работ.\n\n"
+        f"🕘 Ежедневно {settings.work_start:%H:%M}–{settings.work_end:%H:%M}\n"
+        f"📍 {escape(settings.studio_address)}"
     )
 
 
 def main_menu(settings: Settings) -> str:
-    return f"🌸 <b>{escape(settings.studio_name)}</b>\n\nВыберите, что вас интересует ✨"
-
-
-SESSION_EXPIRED = "🌙 Кажется, страница устарела. Давайте начнём запись заново ✨"
-SLOT_TAKEN = "😔 Ой, это время только что заняли. Пожалуйста, выберите другое."
-def no_slots(days: int) -> str:
     return (
-        f"😔 В ближайшие {days} дней у мастера нет свободного времени под эту процедуру.\n"
-        "Попробуйте выбрать другого мастера или напишите нам."
+        f"<b>{escape(settings.studio_name)}</b>\n"
+        f"🕘 Ежедневно {settings.work_start:%H:%M}–{settings.work_end:%H:%M}\n\n"
+        "Выберите раздел:"
     )
+
+
+SESSION_EXPIRED = "Сессия записи устарела. Начните, пожалуйста, заново."
+SLOT_TAKEN = "Это время только что заняли. Выберите, пожалуйста, другое."
+DAY_FULL = "На этот день свободного времени не осталось."
+DATE_UNAVAILABLE = "Эта дата недоступна для записи."
+
+
+def no_slots(days: int, any_master: bool) -> str:
+    who = "у мастеров" if any_master else "у мастера"
+    tail = "" if any_master else " Попробуйте другого мастера или вариант «Любой свободный»."
+    return f"😔 В ближайшие {days} дней {who} нет свободного времени под эту процедуру.{tail}"
+
+
+# ---------- шаги записи ----------
+
+def step_header(n: int, total: int, recap: list[tuple[str, str]]) -> str:
+    lines = [f"<b>Запись</b> · шаг {n} из {total}"]
+    for label, value in recap:
+        lines.append(f"{label}: <b>{escape(value)}</b>")
+    return "\n".join(lines) + "\n\n"
 
 
 def choose_category() -> str:
-    return "✨ <b>Запись</b>\n\nВыберите направление:"
+    return "Выберите направление:"
 
 
 def choose_service(category: str) -> str:
-    return f"✨ <b>{category_title(category)}</b>\n\nВыберите услугу:"
+    return f"{category_title(category)}\nВыберите услугу:"
 
 
-def choose_options(service: Service, selected: list[Option]) -> str:
-    lines = [
-        f"✨ <b>{escape(service.name)}</b>",
-        "",
-        "Дополнительные опции",
-        "Отметьте нужные (можно несколько) и нажмите «Далее».",
-    ]
+def choose_options(selected: list[Option], price: int) -> str:
+    lines = ["Добавьте дополнительные услуги, если нужно.", "Можно выбрать несколько или пропустить этот шаг."]
     if selected:
-        lines += ["", "Выбрано: " + ", ".join(escape(o.name) for o in selected)]
+        lines += ["", f"Стоимость с дополнениями: <b>{money(price)}</b>"]
     return "\n".join(lines)
 
 
-def choose_master() -> str:
-    return "👩‍🎨 Выберите мастера:"
+def choose_master(masters: list[Master], duration: int, price: int) -> str:
+    lines = [f"Длительность: {human_duration(duration)} · {money(price)}", "", "Выберите мастера:"]
+    for m in masters:
+        if m.about:
+            lines.append(f"• <b>{escape(m.name)}</b> — {escape(m.about)}")
+    lines += ["", "<i>«Любой свободный» — покажем всё доступное время у всех мастеров.</i>"]
+    return "\n".join(lines)
 
 
-def choose_date(master_name: str, duration: int) -> str:
-    return (
-        f"📅 Выберите дату\n\n"
-        f"Мастер: <b>{escape(master_name)}</b>\n"
-        f"Длительность: <b>{human_duration(duration)}</b>\n\n"
-        "<i>✕ — всё занято · бледные числа — студия не работает</i>"
+def choose_date() -> str:
+    return "Выберите дату:\n<i>✕ — всё занято · бледные числа — выходные дни</i>"
+
+
+def choose_time(duration: int) -> str:
+    return f"Выберите время (процедура займёт {human_duration(duration)}):\n<i>✕ — время занято</i>"
+
+
+def _payment_hint(settings: Settings, price: int, prepay: int) -> list[str]:
+    online, on_site = settings.online_available, settings.on_site_available
+    full = prepay >= price
+    card = (
+        f"💳 <b>Картой онлайн</b> — {money(prepay)} сейчас"
+        + ("" if full else f", остальное ({money(price - prepay)}) в салоне")
+        + f". Время держится {settings.hold_minutes} мин, пока вы оплачиваете."
     )
-
-
-def choose_time(day, duration: int) -> str:
-    return (
-        f"🕐 Выберите время\n\n"
-        f"<b>{human_date(day).capitalize()}</b>\n"
-        f"Процедура займёт {human_duration(duration)}.\n\n"
-        "<i>✕ — время занято</i>"
-    )
+    salon = f"🏠 <b>В салоне</b> — {money(price)} после процедуры, наличными или картой."
+    if online and on_site:
+        return ["<b>Способ оплаты</b>", card, salon]
+    if online:
+        return ["<b>Оплата</b>", card]
+    return ["<b>Оплата</b>", salon]
 
 
 def summary(
@@ -79,57 +113,44 @@ def summary(
     price: int, prepay: int, settings: Settings,
 ) -> str:
     lines = [
-        "💗 <b>Проверьте, пожалуйста, запись</b>",
+        "<b>Проверьте запись</b>",
         "",
-        f"💅 Услуга: <b>{escape(service.name)}</b> — {money(service.price)}",
+        f"Услуга: <b>{escape(service.name)}</b> — {money(service.price)}",
     ]
     for o in options:
         lines.append(f"   + {escape(o.name)} — {money(o.price)}")
     lines += [
-        f"👩‍🎨 Мастер: <b>{escape(master_name)}</b>",
-        f"📅 Когда: <b>{human_dt(start)}</b>",
-        f"⏳ Длительность: <b>{human_duration(duration)}</b>",
+        f"Мастер: <b>{escape(master_name)}</b>",
+        f"Дата и время: <b>{human_dt(start)}</b>",
+        f"Длительность: {human_duration(duration)}",
         "",
-        f"💰 Итого: <b>{money(price)}</b>",
+        f"Итого: <b>{money(price)}</b>",
         "",
     ]
-    online, on_site = settings.online_available, settings.on_site_available
-    if online and on_site:
-        lines += [
-            "<b>Как удобнее оплатить?</b>",
-            f"💳 Онлайн — предоплата {settings.prepay_percent}% (<b>{money(prepay)}</b>), остальное в студии. "
-            f"Время закрепится за вами на {settings.hold_minutes} минут, пока вы оплачиваете.",
-            "💵 В студии — всю сумму мастеру, наличными или картой.",
-        ]
-    elif online:
-        lines += [
-            f"💳 Предоплата {settings.prepay_percent}%: <b>{money(prepay)}</b>",
-            f"<i>После подтверждения время закрепится за вами на {settings.hold_minutes} минут — "
-            "за это время нужно внести предоплату.</i>",
-        ]
-    else:
-        lines.append("💵 Оплата в студии — наличными или картой мастеру.")
+    lines += _payment_hint(settings, price, prepay)
     return "\n".join(lines)
 
 
+def _payment_status(b: Booking) -> str:
+    if b.status == PENDING:
+        return f"⏳ Ожидает оплаты {money(b.prepay)} до {b.expires_at[-5:]}"
+    if b.pay_on_site:
+        return f"🏠 Оплата в салоне: {money(b.price)}"
+    if b.prepay >= b.price:
+        return f"✅ Оплачено картой: {money(b.prepay)}"
+    return f"✅ Оплачено картой {money(b.prepay)} · в салоне {money(b.price - b.prepay)}"
+
+
 def booking_card(b: Booking, settings: Settings, with_status: bool = True) -> str:
+    service = escape(b.service_name) + (f" + {escape(b.options_text)}" if b.options_text else "")
     lines = [
-        f"💅 <b>{escape(b.service_name)}</b>",
-    ]
-    if b.options_text:
-        lines.append(f"   + {escape(b.options_text)}")
-    lines += [
-        f"👩‍🎨 Мастер: {escape(b.master_name)}",
-        f"📅 {human_dt(b.start_dt)}",
+        f"📅 <b>{human_dt(b.start_dt)}</b>",
+        f"💅 {service}",
+        f"👤 Мастер: {escape(b.master_name)}",
         f"⏳ {human_duration(b.duration)} · {money(b.price)}",
     ]
-    if with_status:
-        if b.status == CONFIRMED and b.pay_on_site:
-            lines.append(f"💵 Оплата в студии: {money(b.price)}")
-        elif b.status == CONFIRMED:
-            lines.append(f"✅ Предоплата {money(b.prepay)} внесена, в студии — {money(b.price - b.prepay)}")
-        elif b.status == PENDING:
-            lines.append(f"⏳ Ожидает предоплаты {money(b.prepay)} до {b.expires_at[-5:]}")
+    if with_status and b.status in (PENDING, CONFIRMED):
+        lines.append(_payment_status(b))
     return "\n".join(lines)
 
 
@@ -137,88 +158,90 @@ def invoice_description(b: Booking) -> str:
     text = f"{b.service_name}"
     if b.options_text:
         text += f" + {b.options_text}"
-    text += f". Мастер {b.master_name}, {human_dt(b.start_dt)}. Остаток оплачивается в студии."
+    text += f". Мастер {b.master_name}, {human_dt(b.start_dt)}."
+    if b.prepay < b.price:
+        text += f" Остаток {b.price - b.prepay} ₽ оплачивается в салоне."
     return text[:255]
 
 
 def payment_success(b: Booking, settings: Settings) -> str:
     return (
-        "🎉 <b>Вы записаны!</b>\n\n"
+        "✅ <b>Вы записаны</b>\n\n"
         + booking_card(b, settings)
-        + f"\n\n📍 {escape(settings.studio_address)}\n\n"
-        "Мы напомним о визите за сутки и за 2 часа. До встречи 💗"
+        + f"\n\n📍 {escape(settings.studio_address)}\n"
+        f"📞 {escape(settings.studio_phone)}\n\n"
+        "Напомним о визите за сутки и за 2 часа. Запись можно посмотреть или отменить в разделе «Мои записи»."
     )
 
 
 def payment_conflict() -> str:
     return (
-        "😔 Оплата прошла, но, к сожалению, пока она обрабатывалась, это время успели занять.\n\n"
-        "Администратор уже знает об этом и свяжется с вами, чтобы подобрать другое время "
-        "или вернуть предоплату."
+        "Оплата прошла, но пока она обрабатывалась, это время успели занять.\n\n"
+        "Администратор уже в курсе и свяжется с вами, чтобы подобрать другое время или вернуть деньги."
     )
 
 
 def hold_expired(b: Booking) -> str:
     return (
-        "⌛️ Время на оплату вышло, и бронь на "
-        f"{human_dt(b.start_dt)} снята.\n\n"
-        "Ничего страшного — можно записаться заново в пару касаний 🌸"
+        f"⌛️ Время на оплату вышло, бронь на {human_dt(b.start_dt)} снята.\n"
+        "Вы можете записаться заново — в том числе с оплатой в салоне."
     )
 
 
 def my_bookings(has_any: bool) -> str:
     if not has_any:
-        return "📋 <b>Мои записи</b>\n\nУ вас пока нет предстоящих записей. Самое время себя порадовать ✨"
-    return "📋 <b>Мои записи</b>\n\nВыберите запись, чтобы посмотреть подробности:"
+        return "<b>Мои записи</b>\n\nПредстоящих записей нет."
+    return "<b>Мои записи</b>\n\nВыберите запись:"
 
 
 def cancel_confirm(b: Booking, settings: Settings) -> str:
     refund = (
-        f"\n\nПредоплата {money(b.prepay)} будет возвращена — администратор свяжется с вами."
+        f"\n\nОплаченные {money(b.prepay)} вернём — администратор свяжется с вами."
         if b.refund_due else ""
     )
-    return "Точно отменить запись?\n\n" + booking_card(b, settings, with_status=False) + refund
+    return "<b>Отменить запись?</b>\n\n" + booking_card(b, settings, with_status=False) + refund
 
 
 def cancel_too_late(settings: Settings) -> str:
     return (
-        f"\n\n<i>Отменить запись через бота можно не позднее чем за {settings.cancel_hours} часов. "
+        f"\n\n<i>Отменить запись в боте можно не позднее чем за {settings.cancel_hours} ч до визита. "
         f"Если планы изменились, позвоните нам: {escape(settings.studio_phone)}</i>"
     )
 
 
-CANCELLED_OK = "🌸 Запись отменена. Будем рады видеть вас в другой раз!"
+CANCELLED_OK = "Запись отменена."
 
+
+# ---------- информация ----------
 
 def prices(services_by_cat: dict[str, list[Service]], options: list[Option]) -> str:
-    lines = ["💰 <b>Услуги и цены</b>"]
+    lines = ["<b>Услуги и цены</b>"]
     for cat, items in services_by_cat.items():
         lines += ["", f"<b>{category_title(cat)}</b>"]
         for s in items:
-            lines.append(f"• {escape(s.name)} — {money(s.price)} · {human_duration(s.duration)}")
+            lines.append(f"{escape(s.name)} — <b>{money(s.price)}</b> · {human_duration(s.duration)}")
     if options:
-        lines += ["", "<b>✨ Дополнительно к ногтевым услугам</b>"]
+        lines += ["", "<b>Дополнительно к ногтевому сервису</b>"]
         for o in options:
-            lines.append(f"• {escape(o.name)} — +{money(o.price)} · +{human_duration(o.duration)}")
+            lines.append(f"{escape(o.name)} — +{money(o.price)} · +{human_duration(o.duration)}")
     return "\n".join(lines)
 
 
 def contacts(settings: Settings) -> str:
     lines = [
-        f"📍 <b>{escape(settings.studio_name)}</b>",
+        f"<b>{escape(settings.studio_name)}</b>",
         "",
-        f"🏠 {escape(settings.studio_address)}",
+        f"📍 {escape(settings.studio_address)}",
         f"📞 {escape(settings.studio_phone)}",
         f"🕘 Ежедневно {settings.work_start:%H:%M}–{settings.work_end:%H:%M}",
     ]
     if settings.studio_instagram:
         lines.append(f"📸 {escape(settings.studio_instagram)}")
-    lines += ["", "Ждём вас в гости 💗"]
     return "\n".join(lines)
 
 
 def gallery_categories() -> str:
-    return "📸 <b>Наши работы</b>\n\nВыберите направление:"
+    return "<b>Портфолио</b>\n\nВыберите направление:"
 
 
 def gallery_photo(category: str, idx: int, total: int, caption: str) -> str:
@@ -229,33 +252,32 @@ def gallery_photo(category: str, idx: int, total: int, caption: str) -> str:
 
 
 def gallery_empty(category: str) -> str:
-    return f"{category_title(category)}\n\nСкоро здесь появятся фотографии наших работ 🌸"
+    return f"{category_title(category)}\n\nФотографии работ скоро появятся."
 
 
 def reminder(b: Booking, settings: Settings, hours: int) -> str:
     when = "завтра" if hours == 24 else "через 2 часа"
     return (
-        f"🔔 <b>Напоминаем: {when} у вас запись</b>\n\n"
-        + booking_card(b, settings, with_status=False)
+        f"🔔 <b>Напоминание: {when} у вас запись</b>\n\n"
+        + booking_card(b, settings)
         + f"\n\n📍 {escape(settings.studio_address)}\n"
-        f"📞 {escape(settings.studio_phone)}\n\nЖдём вас 💗"
+        f"📞 {escape(settings.studio_phone)}"
     )
 
 
 def review_request(b: Booking) -> str:
     return (
-        f"🌸 Спасибо, что были у нас сегодня!\n\n"
-        f"Как вам «{escape(b.service_name)}» у мастера {escape(b.master_name)}? "
-        "Поставьте, пожалуйста, оценку — это очень помогает нам становиться лучше."
+        "Спасибо, что выбрали нас!\n\n"
+        f"Оцените, пожалуйста, визит: «{escape(b.service_name)}», мастер {escape(b.master_name)}."
     )
 
 
 def review_thanks(rating: int) -> str:
     if rating >= 4:
-        return f"{'⭐' * rating}\n\nСпасибо за высокую оценку! Будем рады видеть вас снова 💗"
+        return f"{'⭐' * rating}\nСпасибо за оценку! Будем рады видеть вас снова."
     return (
-        f"{'⭐' * rating}\n\nСпасибо за честность. Нам жаль, что что-то пошло не так — "
-        "администратор свяжется с вами, чтобы во всём разобраться 🌸"
+        f"{'⭐' * rating}\nСпасибо за отзыв. Нам жаль, что визит не оправдал ожиданий — "
+        "администратор свяжется с вами."
     )
 
 
@@ -270,8 +292,8 @@ def _client(b: Booking) -> str:
 
 def admin_new_booking(b: Booking) -> str:
     if b.pay_on_site:
-        return "🆕 <b>Новая запись</b> · 💵 оплата в студии\n\n" + _admin_card(b)
-    return "🆕 <b>Новая бронь (ждёт предоплаты)</b>\n\n" + _admin_card(b)
+        return "🆕 <b>Новая запись</b> · 🏠 оплата в салоне\n\n" + _admin_card(b)
+    return "🆕 <b>Новая бронь (ждёт оплаты картой)</b>\n\n" + _admin_card(b)
 
 
 def admin_paid(b: Booking) -> str:
@@ -301,7 +323,7 @@ def _admin_card(b: Booking) -> str:
         f"💅 {escape(b.service_name)}{opts}\n"
         f"👩‍🎨 {escape(b.master_name)}\n"
         f"📅 {human_dt(b.start_dt)} ({human_duration(b.duration)})\n"
-        f"💰 {money(b.price)}, " + ("оплата в студии" if b.pay_on_site else f"предоплата {money(b.prepay)}") + "\n"
+        f"💰 {money(b.price)}, " + ("оплата в салоне" if b.pay_on_site else f"предоплата {money(b.prepay)}") + "\n"
         f"#запись{b.id}"
     )
 
@@ -312,7 +334,7 @@ def admin_home(settings: Settings, notice: str = "") -> str:
 
 
 STATUS_TITLES = {
-    "pending": "⏳ ждёт предоплаты",
+    "pending": "⏳ ждёт оплаты",
     "confirmed": "✅ подтверждена",
     "completed": "🌸 визит состоялся",
     "cancelled": "❌ отменена",
@@ -338,14 +360,14 @@ def admin_day(day, bookings: list[Booking], day_off: bool = False, header: str =
         )
     if bookings:
         lines += ["", f"Записей: {len(bookings)} · на сумму {money(total)}"]
-        lines += ["<i>✅ предоплата внесена · 💵 оплата в студии · ⏳ ждёт предоплаты\nНажмите на запись, чтобы открыть</i>"]
+        lines += ["<i>✅ предоплата внесена · 🏠 оплата в салоне · ⏳ ждёт предоплаты\nНажмите на запись, чтобы открыть</i>"]
     return "\n".join(lines)
 
 
 def _mark(b: Booking) -> str:
     if b.status == PENDING:
         return "⏳"
-    return "💵" if b.pay_on_site else "✅"
+    return "🏠" if b.pay_on_site else "✅"
 
 
 def admin_digest(day, bookings: list[Booking]) -> str:
@@ -363,7 +385,7 @@ def admin_booking(b: Booking) -> str:
     lines = [f"🧾 <b>Запись #{b.id}</b>", "", _admin_card(b), ""]
     lines.append(f"Статус: {STATUS_TITLES.get(b.status, b.status)}")
     if b.status in (CONFIRMED, "completed"):
-        lines.append("Оплата: 💵 в студии" if b.pay_on_site else f"Оплата: ✅ предоплата {money(b.prepay)} внесена")
+        lines.append("Оплата: 🏠 в салоне" if b.pay_on_site else f"Оплата: ✅ картой {money(b.prepay)}")
     if b.rating:
         lines.append(f"Оценка: {'⭐' * b.rating}")
     return "\n".join(lines)
@@ -409,7 +431,7 @@ def admin_stats(st: dict, now) -> str:
         f"<b>За {month}</b>",
         f"Визитов (оплаченных): <b>{st['month_visits']}</b>",
         f"Сумма услуг: <b>{money(st['month_revenue'])}</b>",
-        f"Получено предоплат: <b>{money(st['month_prepay'])}</b>",
+        f"Оплачено картой: <b>{money(st['month_prepay'])}</b>",
         f"Отмен после оплаты: <b>{st['month_cancelled']}</b>",
         f"Броней без оплаты (снялись): <b>{st['month_expired']}</b>",
         "",
@@ -545,3 +567,7 @@ def admin_vac_confirm(start, end, bookings: list[Booking]) -> str:
             lines.append(f"… и ещё {len(bookings) - 10}")
         lines.append("Перенесите или отмените их в «📋 Все записи по датам».")
     return "\n".join(lines)
+
+
+def admin_switched_to_cash(b: Booking) -> str:
+    return "🔁 <b>Клиент выбрал оплату в салоне</b> (вместо карты)\n\n" + _admin_card(b)

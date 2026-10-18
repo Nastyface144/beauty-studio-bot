@@ -16,7 +16,8 @@ from bot.payments.service import finalize_payment, parse_payload, send_payment
 from bot.utils.notify import notify_admins
 from bot.utils.menu import main_menu_screen
 from bot.utils.timeutil import now_local, to_str
-from bot.utils.ui import safe_delete, show
+from bot.keyboards import client as client_kb
+from bot.utils.ui import safe_delete, send_screen, show
 
 log = logging.getLogger(__name__)
 router = Router(name="payments")
@@ -87,6 +88,28 @@ async def pay_again(cb: CallbackQuery, callback_data: MyCb, bot: Bot, db: Databa
     await cb.answer()
     await safe_delete(bot, booking.user_id, booking.invoice_message_id)
     await send_payment(bot, db, settings, booking)
+
+
+@router.callback_query(MyCb.filter(F.action == "to_cash"))
+async def switch_to_cash(cb: CallbackQuery, callback_data: MyCb, bot: Bot, db: Database, settings: Settings) -> None:
+    """Клиент передумал платить картой — оставляем запись с оплатой в салоне."""
+    if not settings.on_site_available:
+        await cb.answer("Оплата в салоне сейчас недоступна", show_alert=True)
+        return
+    old = await db.get_booking(callback_data.booking_id)
+    booking = await db.switch_to_cash(callback_data.booking_id, cb.from_user.id, now_local(settings.timezone))
+    if booking is None:
+        await cb.answer("Бронь уже неактивна", show_alert=True)
+        return
+    await cb.answer("Запись подтверждена")
+    log.info("Бронь #%s переведена на оплату в салоне", booking.id)
+    if old is not None and old.invoice_message_id:
+        await db.set_invoice_message(booking.id, None)
+    menu = client_kb.main_menu(is_admin=cb.from_user.id in settings.admin_ids)
+    await send_screen(bot, db, booking.user_id, texts.payment_success(booking, settings), menu)
+    if old is not None:
+        await safe_delete(bot, booking.user_id, old.invoice_message_id)
+    await notify_admins(bot, settings, texts.admin_switched_to_cash(booking))
 
 
 @router.callback_query(MyCb.filter(F.action == "drop"))

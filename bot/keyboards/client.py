@@ -23,14 +23,14 @@ def back_btn(cb, text: str = "◀️ Назад") -> InlineKeyboardButton:
 
 
 def menu_btn() -> InlineKeyboardButton:
-    return _btn("🏠 В меню", MenuCb(action="main"))
+    return _btn("☰ Главное меню", MenuCb(action="main"))
 
 
 def main_menu(is_admin: bool = False) -> InlineKeyboardMarkup:
     rows = [
-        [_btn("💅 Записаться", MenuCb(action="book"))],
-        [_btn("📋 Мои записи", MenuCb(action="my")), _btn("💰 Услуги и цены", MenuCb(action="prices"))],
-        [_btn("📸 Наши работы", MenuCb(action="gallery")), _btn("📍 Контакты", MenuCb(action="contacts"))],
+        [_btn("📅 Записаться", MenuCb(action="book"))],
+        [_btn("🗂 Мои записи", MenuCb(action="my")), _btn("💰 Услуги и цены", MenuCb(action="prices"))],
+        [_btn("📸 Портфолио", MenuCb(action="gallery")), _btn("📍 Контакты", MenuCb(action="contacts"))],
     ]
     if is_admin:
         rows.append([_btn("🛠 Админ-панель", AdminCb(action="home"))])
@@ -43,7 +43,7 @@ def only_menu() -> InlineKeyboardMarkup:
 
 def prices() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("💅 Записаться", MenuCb(action="book"))],
+        [_btn("📅 Записаться", MenuCb(action="book"))],
         [back_btn(MenuCb(action="main"))],
     ])
 
@@ -52,7 +52,7 @@ def contacts(settings: Settings) -> InlineKeyboardMarkup:
     rows = []
     if settings.studio_map_url:
         rows.append([InlineKeyboardButton(text="🗺 Открыть на карте", url=settings.studio_map_url)])
-    rows.append([_btn("💅 Записаться", MenuCb(action="book"))])
+    rows.append([_btn("📅 Записаться", MenuCb(action="book"))])
     rows.append([back_btn(MenuCb(action="main"))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -77,15 +77,17 @@ def services(items: list[Service]) -> InlineKeyboardMarkup:
 def options(items: list[Option], selected: set[int]) -> InlineKeyboardMarkup:
     rows = []
     for o in items:
-        mark = "✅" if o.id in selected else "▫️"
+        mark = "✅" if o.id in selected else "➕"
         rows.append([_btn(f"{mark} {o.name} · +{money(o.price)}", BookCb(action="opt", value=str(o.id)))])
-    rows.append([_btn("Далее ▶️" if selected else "Без опций ▶️", BookCb(action="opts_done"))])
+    rows.append([_btn("Продолжить ▶️" if selected else "Пропустить ▶️", BookCb(action="opts_done"))])
     rows.append([back_btn(BookCb(action="back", value="services"))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def masters(items: list[Master], back_to: str) -> InlineKeyboardMarkup:
-    rows = [[_btn(f"👩‍🎨 {m.name}", BookCb(action="mst", value=str(m.id)))] for m in items]
+    rows = [[_btn(f"👤 {m.name}", BookCb(action="mst", value=str(m.id)))] for m in items]
+    if len(items) > 1:
+        rows.insert(0, [_btn("✨ Любой свободный мастер", BookCb(action="mst", value="0"))])
     rows.append([back_btn(BookCb(action="back", value=back_to))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
@@ -117,17 +119,16 @@ def times(grid: list[tuple[datetime, bool]]) -> InlineKeyboardMarkup:
     return kb.as_markup()
 
 
-def summary(settings: Settings, prepay: int) -> InlineKeyboardMarkup:
+def summary(settings: Settings, price: int, prepay: int) -> InlineKeyboardMarkup:
     rows = []
     online, on_site = settings.online_available, settings.on_site_available
     if online:
-        text = f"💳 Предоплата онлайн {money(prepay)}" if on_site else f"💳 Подтвердить и оплатить {money(prepay)}"
-        rows.append([_btn(text, BookCb(action="confirm", value="online"))])
+        rows.append([_btn(f"💳 Оплатить картой · {money(prepay)}", BookCb(action="confirm", value="online"))])
     if on_site:
-        text = "💵 Оплачу в студии" if online else "✅ Записаться"
+        text = "🏠 Оплачу в салоне" if online else "✅ Подтвердить запись"
         rows.append([_btn(text, BookCb(action="confirm", value="cash"))])
-    rows.append([back_btn(BookCb(action="back", value="times"))])
-    rows.append([_btn("✖️ Отменить запись", MenuCb(action="main"))])
+    rows.append([back_btn(BookCb(action="back", value="times"), "◀️ Изменить время")])
+    rows.append([_btn("✖️ Отменить", MenuCb(action="main"))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
@@ -140,24 +141,30 @@ def slot_taken() -> InlineKeyboardMarkup:
 
 def restart_booking() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn("💅 Записаться", MenuCb(action="book"))],
+        [_btn("📅 Записаться", MenuCb(action="book"))],
         [menu_btn()],
     ])
 
 
 # ---------- оплата ----------
 
-def invoice(booking: Booking) -> InlineKeyboardMarkup:
+def _cash_row(booking: Booking, allow_cash: bool) -> list[list[InlineKeyboardButton]]:
+    return [[_btn("🏠 Лучше оплачу в салоне", MyCb(action="to_cash", booking_id=booking.id))]] if allow_cash else []
+
+
+def invoice(booking: Booking, allow_cash: bool = True) -> InlineKeyboardMarkup:
     # Кнопка оплаты обязана быть первой
     return InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text=f"💳 Оплатить {money(booking.prepay)}", pay=True)],
+        [InlineKeyboardButton(text=f"💳 Оплатить картой · {money(booking.prepay)}", pay=True)],
+        *_cash_row(booking, allow_cash),
         [_btn("✖️ Отменить бронь", MyCb(action="drop", booking_id=booking.id))],
     ])
 
 
-def demo_payment(booking: Booking) -> InlineKeyboardMarkup:
+def demo_payment(booking: Booking, allow_cash: bool = True) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=[
-        [_btn(f"💳 Оплатить {money(booking.prepay)} (демо)", MyCb(action="demo_pay", booking_id=booking.id))],
+        [_btn(f"💳 Оплатить картой · {money(booking.prepay)} (демо)", MyCb(action="demo_pay", booking_id=booking.id))],
+        *_cash_row(booking, allow_cash),
         [_btn("✖️ Отменить бронь", MyCb(action="drop", booking_id=booking.id))],
     ])
 
@@ -172,15 +179,16 @@ def my_bookings(items: list[Booking]) -> InlineKeyboardMarkup:
         text = f"{icon} {dt:%d.%m} {WEEKDAYS_SHORT[dt.weekday()]} {dt:%H:%M} · {b.service_name}"
         rows.append([_btn(text[:60], MyCb(action="view", booking_id=b.id))])
     if not items:
-        rows.append([_btn("💅 Записаться", MenuCb(action="book"))])
+        rows.append([_btn("📅 Записаться", MenuCb(action="book"))])
     rows.append([back_btn(MenuCb(action="main"))])
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def my_booking(b: Booking, can_cancel: bool) -> InlineKeyboardMarkup:
+def my_booking(b: Booking, can_cancel: bool, allow_cash: bool = True) -> InlineKeyboardMarkup:
     rows = []
     if b.status == PENDING:
-        rows.append([_btn(f"💳 Оплатить {money(b.prepay)}", MyCb(action="pay", booking_id=b.id))])
+        rows.append([_btn(f"💳 Оплатить картой · {money(b.prepay)}", MyCb(action="pay", booking_id=b.id))])
+        rows += _cash_row(b, allow_cash)
     if can_cancel:
         rows.append([_btn("✖️ Отменить запись", MyCb(action="cancel", booking_id=b.id))])
     rows.append([back_btn(MenuCb(action="my"))])
@@ -215,7 +223,7 @@ def gallery_nav(category: str, index: int, total: int, item_id: int, is_admin: b
             _btn(f"{index + 1} / {total}", "noop"),
             _btn("▶️", GalleryCb(action="show", category=category, index=next_i)),
         ])
-    rows.append([_btn("💅 Хочу так же", MenuCb(action="book"))])
+    rows.append([_btn("📅 Записаться", MenuCb(action="book"))])
     if is_admin:
         rows.append([_btn("🗑 Удалить фото", GalleryCb(action="del", category=category, index=index, item_id=item_id))])
     rows.append([back_btn(GalleryCb(action="cats"))])

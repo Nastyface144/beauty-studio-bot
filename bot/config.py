@@ -117,5 +117,6 @@ def load_settings() -> Settings:
         booking_days=_parse_int(os.getenv("BOOKING_DAYS"), 30, 1, 60),
         digest_time=_parse_time(os.getenv("DIGEST_TIME", "20:00"), time(20, 0)),
         pay_online=_parse_bool(os.getenv("PAY_ONLINE"), True),
+        prepay_percent=_parse_int(os.getenv("PREPAY_PERCENT"), 30, 1, 100),
         pay_on_site=_parse_bool(os.getenv("PAY_ON_SITE"), True),
     )

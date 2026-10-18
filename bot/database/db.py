@@ -389,6 +389,29 @@ class Database:
             )
         return await self.get_booking(booking_id), True
 
+    async def switch_to_cash(self, booking_id: int, user_id: int, now: datetime) -> Booking | None:
+        """Бронь, ждущая оплаты картой, становится подтверждённой записью с оплатой в салоне.
+        None — если бронь уже неактивна (оплачена, отменена или истекла)."""
+        async with self._lock:
+            booking = await self.get_booking(booking_id)
+            if (
+                booking is None or booking.user_id != user_id or booking.status != PENDING
+                or (booking.expires_at or "") <= to_str(now)
+            ):
+                return None
+            start = booking.start_dt
+            await self.conn.execute(
+                """UPDATE bookings SET status = ?, payment_method = 'cash', prepay = 0, expires_at = NULL,
+                       reminded_24 = ?, reminded_2 = ? WHERE id = ?""",
+                (
+                    CONFIRMED,
+                    int(start - now <= timedelta(hours=24)),
+                    int(start - now <= timedelta(hours=2)),
+                    booking_id,
+                ),
+            )
+        return await self.get_booking(booking_id)
+
     async def cancel_booking(self, booking_id: int) -> None:
         await self.conn.execute(
             "UPDATE bookings SET status = ?, expires_at = NULL WHERE id = ?", (CANCELLED, booking_id)
